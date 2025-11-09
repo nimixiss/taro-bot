@@ -17,8 +17,40 @@ single_card_usage = {}  # {user_id: 'YYYY-MM-DD'}
 # === Загрузка данных ===
 with open("tarot_cards.json", "r", encoding="utf-8") as f:
     tarot_deck = json.load(f)
-with open("tarot_cards_topics.json", "r", encoding="utf-8") as f:
-    tarot_topics = json.load(f)
+
+TOPICS_FILE = "tarot_cards_topics.json"
+if os.path.exists(TOPICS_FILE):
+    with open(TOPICS_FILE, "r", encoding="utf-8") as f:
+        tarot_topics = json.load(f)
+else:
+    # Файл с темами может отсутствовать на некоторых развёртываниях.
+    # В этом случае используем данные из tarot_cards.json, если они
+    # уже содержат тематические значения.
+    tarot_topics = {}
+    for card_name, card_data in tarot_deck.items():
+        if isinstance(card_data, dict):
+            filtered_topics = {
+                topic: values
+                for topic, values in card_data.items()
+                if isinstance(values, list)
+            }
+            if filtered_topics:
+                tarot_topics[card_name] = filtered_topics
+
+
+def _collect_all_meanings(card_data):
+    """Возвращает плоский список значений карты из любых доступных структур."""
+    if isinstance(card_data, list):
+        return [value for value in card_data if isinstance(value, str)]
+
+    if isinstance(card_data, dict):
+        collected = []
+        for values in card_data.values():
+            if isinstance(values, list):
+                collected.extend(v for v in values if isinstance(v, str))
+        return collected
+
+    return []
 
 TOPIC_TO_KEY = {
     "❤️ Любовь": "love",
@@ -32,9 +64,16 @@ with open("combinations.json", "r", encoding="utf-8") as f:
     combinations_3cards = json.load(f)
 
 TWO_CARDS_URL = "https://raw.githubusercontent.com/nimixiss/tarot-webapp/main/two_card_combinations_full.json"
-response = requests.get(TWO_CARDS_URL)
-response.raise_for_status()
-combinations_2cards = response.json()
+try:
+    response = requests.get(TWO_CARDS_URL, timeout=15)
+    response.raise_for_status()
+    combinations_2cards = response.json()
+except requests.RequestException as exc:
+    combinations_2cards = {}
+    print(
+        f"Не удалось загрузить комбинации для двух карт: {exc}",
+        flush=True,
+    )
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -113,45 +152,11 @@ def send_single_card_with_topic(message, user_id: int):
         meaning = random.choice(meaning_list)
     else:
         # запасной вариант — если вдруг для карты нет записей в новом файле
-        meaning = random.choice(tarot_deck[card])
-
-    # Запоминаем, что пользователь уже тянул карту сегодня (кроме админа)
-    if user_id != ADMIN_ID:
-        _mark_single_card_used_today(user_id)
-
-    # Собираем главное меню обратно
-    main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
-    main_menu.add(
-        KeyboardButton("🃏 Одна карта"),
-        KeyboardButton("🔮 Три карты"),
-    )
-    main_menu.add(
-        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
-    )
-
-    caption = (
-        f"🃏 *{card}*\n"
-        f"Сфера: {topic}\n"
-        f"_{meaning}_"
-    )
-
-    path = os.path.join(CARDS_FOLDER, f"{card}.png")
-    if os.path.exists(path):
-        with open(path, "rb") as photo:
-            bot.send_photo(
-                message.chat.id,
-                photo,
-                caption=caption,
-                parse_mode="Markdown",
-                reply_markup=main_menu,
-            )
-    else:
-        bot.send_message(
-            message.chat.id,
-            caption,
-            parse_mode="Markdown",
-            reply_markup=main_menu,
-        )
+        fallback_values = _collect_all_meanings(tarot_deck.get(card))
+        if fallback_values:
+            meaning = random.choice(fallback_values)
+        else:
+            meaning = "Значение не найдено — доверься своей интуиции."
 
     # Запоминаем, что пользователь уже тянул карту сегодня (кроме админа)
     if user_id != ADMIN_ID:
@@ -224,4 +229,5 @@ def handle_web_app_data(message):
         bot.send_message(message.chat.id, f"Ошибка обработки: {e}")
 
 # === Запуск бота ===
-bot.polling(timeout=60, long_polling_timeout=30)
+if __name__ == "__main__":
+    bot.polling(timeout=60, long_polling_timeout=30)
