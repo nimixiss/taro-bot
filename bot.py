@@ -77,18 +77,28 @@ except requests.RequestException as exc:
 
 bot = telebot.TeleBot(TOKEN)
 
-# === Главное меню ===
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
+
+def _build_main_menu() -> ReplyKeyboardMarkup:
+    """Создаёт главное меню с раскладами."""
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         KeyboardButton("🃏 Одна карта"),
-        KeyboardButton("🔮 Три карты")
+        KeyboardButton("🔮 Три карты"),
     )
     markup.add(
-        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL))
+        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
     )
-    bot.send_message(message.chat.id, "🌙 Привет! Я Таро-бот. Выбери расклад:", reply_markup=markup)
+    return markup
+
+
+# === Главное меню ===
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.send_message(
+        message.chat.id,
+        "🌙 Привет! Я Таро-бот. Выбери расклад:",
+        reply_markup=_build_main_menu(),
+    )
 
 # === Одна карта с лимитом и выбором темы ===
 
@@ -162,16 +172,10 @@ def send_single_card_with_topic(message, user_id: int):
     if user_id != ADMIN_ID:
         _mark_single_card_used_today(user_id)
 
-    # Собираем главное меню обратно
-    main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
-    main_menu.add(
-        KeyboardButton("🃏 Одна карта"),
-        KeyboardButton("🔮 Три карты"),
-    )
-    main_menu.add(
-        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
-    )
+    _send_single_card_reply(message.chat.id, card, topic, meaning)
 
+
+def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -> None:
     caption = (
         f"🃏 *{card}*\n"
         f"Сфера: {topic}\n"
@@ -182,19 +186,20 @@ def send_single_card_with_topic(message, user_id: int):
     if os.path.exists(path):
         with open(path, "rb") as photo:
             bot.send_photo(
-                message.chat.id,
+                chat_id,
                 photo,
                 caption=caption,
                 parse_mode="Markdown",
-                reply_markup=main_menu,
+                reply_markup=_build_main_menu(),
             )
-    else:
-        bot.send_message(
-            message.chat.id,
-            caption,
-            parse_mode="Markdown",
-            reply_markup=main_menu,
-        )
+            return
+
+    bot.send_message(
+        chat_id,
+        caption,
+        parse_mode="Markdown",
+        reply_markup=_build_main_menu(),
+    )
 
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
