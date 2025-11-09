@@ -17,6 +17,16 @@ single_card_usage = {}  # {user_id: 'YYYY-MM-DD'}
 # === Загрузка данных ===
 with open("tarot_cards.json", "r", encoding="utf-8") as f:
     tarot_deck = json.load(f)
+with open("tarot_cards_topics.json", "r", encoding="utf-8") as f:
+    tarot_topics = json.load(f)
+
+TOPIC_TO_KEY = {
+    "❤️ Любовь": "love",
+    "💼 Карьера": "career",
+    "💰 Финансы": "finance",
+    "🧘‍♀️ Здоровье": "health",
+    "🧿 Совет дня": "advice",
+}
 
 with open("combinations.json", "r", encoding="utf-8") as f:
     combinations_3cards = json.load(f)
@@ -83,7 +93,6 @@ def ask_single_card_topic(message):
         reply_markup=markup,
     )
     bot.register_next_step_handler(msg, send_single_card_with_topic, user_id)
-
 def send_single_card_with_topic(message, user_id: int):
     topic = message.text
 
@@ -96,7 +105,53 @@ def send_single_card_with_topic(message, user_id: int):
 
     # Тянем карту
     card = random.choice(list(tarot_deck.keys()))
-    meaning = random.choice(tarot_deck[card])
+    category_key = TOPIC_TO_KEY[topic]
+
+    # Берём значение по категории из tarot_topics
+    if card in tarot_topics and category_key in tarot_topics[card]:
+        meaning_list = tarot_topics[card][category_key]
+        meaning = random.choice(meaning_list)
+    else:
+        # запасной вариант — если вдруг для карты нет записей в новом файле
+        meaning = random.choice(tarot_deck[card])
+
+    # Запоминаем, что пользователь уже тянул карту сегодня (кроме админа)
+    if user_id != ADMIN_ID:
+        _mark_single_card_used_today(user_id)
+
+    # Собираем главное меню обратно
+    main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
+    main_menu.add(
+        KeyboardButton("🃏 Одна карта"),
+        KeyboardButton("🔮 Три карты"),
+    )
+    main_menu.add(
+        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
+    )
+
+    caption = (
+        f"🃏 *{card}*\n"
+        f"Сфера: {topic}\n"
+        f"_{meaning}_"
+    )
+
+    path = os.path.join(CARDS_FOLDER, f"{card}.png")
+    if os.path.exists(path):
+        with open(path, "rb") as photo:
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=main_menu,
+            )
+    else:
+        bot.send_message(
+            message.chat.id,
+            caption,
+            parse_mode="Markdown",
+            reply_markup=main_menu,
+        )
 
     # Запоминаем, что пользователь уже тянул карту сегодня (кроме админа)
     if user_id != ADMIN_ID:
