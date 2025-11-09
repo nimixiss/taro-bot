@@ -5,7 +5,7 @@ import random
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 
 # === Настройки ===
-TOKEN = "8340920027:AAEjQWkTemEkikLbDT2J9JDgXrSIvU8Pryk"
+TOKEN = os.getenv("8340920027:AAEjQWkTemEkikLbDT2J9JDgXrSIvU8Pryk")
 CARDS_FOLDER = "images"
 WEBAPP_URL = "https://nimixiss.github.io/tarot-webapp/"
 
