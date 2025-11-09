@@ -2,6 +2,7 @@ import os
 import telebot
 import json
 import random
+import requests
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 
 # === Настройки ===
@@ -16,8 +17,10 @@ with open("tarot_cards.json", "r", encoding="utf-8") as f:
 with open("combinations.json", "r", encoding="utf-8") as f:
     combinations_3cards = json.load(f)
 
-with open("webapp/two_card_combinations_full.json", "r", encoding="utf-8") as f:
-    combinations_2cards = json.load(f)
+TWO_CARDS_URL = "https://raw.githubusercontent.com/nimixiss/tarot-webapp/main/two_card_combinations_full.json"
+response = requests.get(TWO_CARDS_URL)
+response.raise_for_status()
+combinations_2cards = response.json()
 
 bot = telebot.TeleBot(TOKEN)
 
