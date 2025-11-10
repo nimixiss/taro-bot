@@ -236,8 +236,19 @@ def handle_web_app_data(message):
         bot.send_message(message.chat.id, f"Ошибка обработки: {e}")
 
 # === Запуск бота ===
-def _start_polling(max_retries: int = 3, retry_delay: int = 5) -> None:
-    """Запускает long polling, обрабатывая конфликт 409 от Telegram."""
+def _start_polling(
+    *,
+    timeout: int = 60,
+    long_polling_timeout: int = 30,
+    max_retries: int = 3,
+    retry_delay: int = 5,
+) -> None:
+    """Запускает long polling, обрабатывая конфликт 409 от Telegram.
+
+    Параметры таймаутов оставлены именованными, чтобы оставаться совместимыми
+    с существующими вызовами вроде ``bot.infinity_polling(long_polling_timeout=30)``
+    из основной ветки.
+    """
 
     try:
         bot.remove_webhook()
@@ -247,7 +258,7 @@ def _start_polling(max_retries: int = 3, retry_delay: int = 5) -> None:
     attempts = 0
     while True:
         try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=30)
+            bot.infinity_polling(timeout=timeout, long_polling_timeout=long_polling_timeout)
             return
         except ApiTelegramException as exc:
             if exc.error_code != 409:
@@ -272,4 +283,4 @@ def _start_polling(max_retries: int = 3, retry_delay: int = 5) -> None:
 
 
 if __name__ == "__main__":
-    _start_polling()
+    _start_polling(timeout=60, long_polling_timeout=30)
