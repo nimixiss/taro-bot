@@ -170,9 +170,12 @@ def send_single_card_with_topic(message, user_id: int):
         else:
             meaning = "Значение не найдено — доверься своей интуиции."
 
-    # Запоминаем, что пользователь уже тянул карту сегодня (кроме админа)
-    if user_id != ADMIN_ID:
-        _mark_single_card_used_today(user_id)
+    # В первую очередь пытаемся взять расширенные описания из tarot_deck.
+    card_data = tarot_deck.get(card)
+    if isinstance(card_data, dict):
+        expanded_values = card_data.get(category_key)
+        if isinstance(expanded_values, list):
+            meaning_list = [value for value in expanded_values if isinstance(value, str)]
 
     # Собираем главное меню обратно
     main_menu = _build_main_menu()
