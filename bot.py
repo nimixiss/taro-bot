@@ -80,8 +80,9 @@ except requests.RequestException as exc:
 bot = telebot.TeleBot(TOKEN)
 
 
-def _build_main_menu() -> ReplyKeyboardMarkup:
-    """Создаёт главное меню с раскладами."""
+# === Главное меню ===
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         KeyboardButton("🃏 Одна карта"),
@@ -90,16 +91,11 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
     markup.add(
         KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
     )
-    return markup
 
-
-# === Главное меню ===
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
     bot.send_message(
         message.chat.id,
         "🌙 Привет! Я Таро-бот. Выбери расклад:",
-        reply_markup=_build_main_menu(),
+        reply_markup=markup,
     )
 
 # === Одна карта с лимитом и выбором темы ===
@@ -174,10 +170,16 @@ def send_single_card_with_topic(message, user_id: int):
     if user_id != ADMIN_ID:
         _mark_single_card_used_today(user_id)
 
-    _send_single_card_reply(message.chat.id, card, topic, meaning)
+    # Собираем главное меню обратно
+    main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
+    main_menu.add(
+        KeyboardButton("🃏 Одна карта"),
+        KeyboardButton("🔮 Три карты"),
+    )
+    main_menu.add(
+        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
+    )
 
-
-def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -> None:
     caption = (
         f"🃏 *{card}*\n"
         f"Сфера: {topic}\n"
@@ -188,20 +190,19 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
     if os.path.exists(path):
         with open(path, "rb") as photo:
             bot.send_photo(
-                chat_id,
+                message.chat.id,
                 photo,
                 caption=caption,
                 parse_mode="Markdown",
-                reply_markup=_build_main_menu(),
+                reply_markup=main_menu,
             )
-            return
-
-    bot.send_message(
-        chat_id,
-        caption,
-        parse_mode="Markdown",
-        reply_markup=_build_main_menu(),
-    )
+    else:
+        bot.send_message(
+            message.chat.id,
+            caption,
+            parse_mode="Markdown",
+            reply_markup=main_menu,
+        )
 
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
@@ -237,18 +238,13 @@ def handle_web_app_data(message):
 
 # === Запуск бота ===
 def _start_polling(
-    *,
     timeout: int = 60,
     long_polling_timeout: int = 30,
+    *,
     max_retries: int = 3,
     retry_delay: int = 5,
 ) -> None:
-    """Запускает long polling, обрабатывая конфликт 409 от Telegram.
-
-    Параметры таймаутов оставлены именованными, чтобы оставаться совместимыми
-    с существующими вызовами вроде ``bot.infinity_polling(long_polling_timeout=30)``
-    из основной ветки.
-    """
+    """Запускает polling, перехватывая конфликт 409 от Telegram."""
 
     try:
         bot.remove_webhook()
@@ -258,7 +254,7 @@ def _start_polling(
     attempts = 0
     while True:
         try:
-            bot.infinity_polling(timeout=timeout, long_polling_timeout=long_polling_timeout)
+            bot.polling(timeout=timeout, long_polling_timeout=long_polling_timeout)
             return
         except ApiTelegramException as exc:
             if exc.error_code != 409:
@@ -283,4 +279,4 @@ def _start_polling(
 
 
 if __name__ == "__main__":
-    _start_polling(timeout=60, long_polling_timeout=30)
+    _start_polling()
