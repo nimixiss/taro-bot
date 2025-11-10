@@ -3,7 +3,9 @@ import telebot
 import json
 import random
 import requests
+import time
 from datetime import datetime
+from telebot.apihelper import ApiTelegramException
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 
 # === Настройки ===
@@ -172,6 +174,8 @@ def send_single_card_with_topic(message, user_id: int):
     if user_id != ADMIN_ID:
         _mark_single_card_used_today(user_id)
 
+    # Собираем главное меню обратно
+    main_menu = _build_main_menu()
     _send_single_card_reply(message.chat.id, card, topic, meaning)
 
 
