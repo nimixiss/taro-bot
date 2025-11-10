@@ -82,7 +82,6 @@ bot = telebot.TeleBot(TOKEN)
 
 def _build_main_menu() -> ReplyKeyboardMarkup:
     """Создаёт главное меню с раскладами."""
-
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         KeyboardButton("🃏 Одна карта"),
@@ -159,7 +158,17 @@ def send_single_card_with_topic(message, user_id: int):
     card = random.choice(list(tarot_deck.keys()))
     category_key = TOPIC_TO_KEY[topic]
 
-    meaning_list = []
+    # Берём значение по категории из tarot_topics
+    if card in tarot_topics and category_key in tarot_topics[card]:
+        meaning_list = tarot_topics[card][category_key]
+        meaning = random.choice(meaning_list)
+    else:
+        # запасной вариант — если вдруг для карты нет записей в новом файле
+        fallback_values = _collect_all_meanings(tarot_deck.get(card))
+        if fallback_values:
+            meaning = random.choice(fallback_values)
+        else:
+            meaning = "Значение не найдено — доверься своей интуиции."
 
     # В первую очередь пытаемся взять расширенные описания из tarot_deck.
     card_data = tarot_deck.get(card)
@@ -168,29 +177,12 @@ def send_single_card_with_topic(message, user_id: int):
         if isinstance(expanded_values, list):
             meaning_list = [value for value in expanded_values if isinstance(value, str)]
 
-    # Если по какой-то причине в основном файле нет записей, используем topics.
-    if not meaning_list and card in tarot_topics:
-        topic_values = tarot_topics[card].get(category_key)
-        if isinstance(topic_values, list):
-            meaning_list = [value for value in topic_values if isinstance(value, str)]
-
-    if meaning_list:
-        meaning = random.choice(meaning_list)
-    else:
-        # запасной вариант — если вдруг для карты нет записей в обоих файлах
-        fallback_values = _collect_all_meanings(card_data)
-        if fallback_values:
-            meaning = random.choice(fallback_values)
-        else:
-            meaning = "Значение не найдено — доверься своей интуиции."
-
-    # Запоминаем, что пользователь уже тянул карту сегодня (кроме админа)
-    if user_id != ADMIN_ID:
-        _mark_single_card_used_today(user_id)
-
     # Собираем главное меню обратно
     main_menu = _build_main_menu()
+    _send_single_card_reply(message.chat.id, card, topic, meaning)
 
+
+def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -> None:
     caption = (
         f"🃏 *{card}*\n"
         f"Сфера: {topic}\n"
@@ -201,19 +193,19 @@ def send_single_card_with_topic(message, user_id: int):
     if os.path.exists(path):
         with open(path, "rb") as photo:
             bot.send_photo(
-                message.chat.id,
+                chat_id,
                 photo,
                 caption=caption,
                 parse_mode="Markdown",
-                reply_markup=main_menu,
+                reply_markup=_build_main_menu(),
             )
-        return
+            return
 
     bot.send_message(
-        message.chat.id,
+        chat_id,
         caption,
         parse_mode="Markdown",
-        reply_markup=main_menu,
+        reply_markup=_build_main_menu(),
     )
 
 # === Три карты ===
@@ -249,46 +241,5 @@ def handle_web_app_data(message):
         bot.send_message(message.chat.id, f"Ошибка обработки: {e}")
 
 # === Запуск бота ===
-def _start_polling(
-    timeout: int = 60,
-    long_polling_timeout: int = 30,
-    *,
-    max_retries: int = 3,
-    retry_delay: int = 5,
-) -> None:
-    """Запускает polling, перехватывая конфликт 409 от Telegram."""
-
-    try:
-        bot.remove_webhook()
-    except ApiTelegramException as exc:
-        print(f"Не удалось снять webhook: {exc}", flush=True)
-
-    attempts = 0
-    while True:
-        try:
-            bot.polling(timeout=timeout, long_polling_timeout=long_polling_timeout)
-            return
-        except ApiTelegramException as exc:
-            if exc.error_code != 409:
-                raise
-
-            attempts += 1
-            print(
-                "Polling остановлен: обнаружен другой активный процесс бота. "
-                "Через несколько секунд попробуем снова...",
-                flush=True,
-            )
-
-            if attempts >= max_retries:
-                print(
-                    "Не удалось получить управление ботом. "
-                    "Убедись, что не осталось других запущенных экземпляров.",
-                    flush=True,
-                )
-                return
-
-            time.sleep(retry_delay)
-
-
 if __name__ == "__main__":
-    _start_polling()
+    bot.polling(timeout=60, long_polling_timeout=30)
