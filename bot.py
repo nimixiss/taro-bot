@@ -80,9 +80,9 @@ except requests.RequestException as exc:
 bot = telebot.TeleBot(TOKEN)
 
 
-# === Главное меню ===
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
+def _build_main_menu() -> ReplyKeyboardMarkup:
+    """Создаёт главное меню с раскладами."""
+
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         KeyboardButton("🃏 Одна карта"),
@@ -91,11 +91,16 @@ def send_welcome(message):
     markup.add(
         KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
     )
+    return markup
 
+
+# === Главное меню ===
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
     bot.send_message(
         message.chat.id,
         "🌙 Привет! Я Таро-бот. Выбери расклад:",
-        reply_markup=markup,
+        reply_markup=_build_main_menu(),
     )
 
 # === Одна карта с лимитом и выбором темы ===
@@ -171,14 +176,7 @@ def send_single_card_with_topic(message, user_id: int):
         _mark_single_card_used_today(user_id)
 
     # Собираем главное меню обратно
-    main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
-    main_menu.add(
-        KeyboardButton("🃏 Одна карта"),
-        KeyboardButton("🔮 Три карты"),
-    )
-    main_menu.add(
-        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
-    )
+    main_menu = _build_main_menu()
 
     caption = (
         f"🃏 *{card}*\n"
@@ -204,41 +202,6 @@ def send_single_card_with_topic(message, user_id: int):
         parse_mode="Markdown",
         reply_markup=main_menu,
     )
-    return
-
-    # --- Дублирующий блок из основной ветки сохранён для простого мерджа ---
-    main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
-    main_menu.add(
-        KeyboardButton("🃏 Одна карта"),
-        KeyboardButton("🔮 Три карты"),
-    )
-    main_menu.add(
-        KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
-    )
-
-    caption = (
-        f"🃏 *{card}*\n"
-        f"Сфера: {topic}\n"
-        f"_{meaning}_"
-    )
-
-    path = os.path.join(CARDS_FOLDER, f"{card}.png")
-    if os.path.exists(path):
-        with open(path, "rb") as photo:
-            bot.send_photo(
-                message.chat.id,
-                photo,
-                caption=caption,
-                parse_mode="Markdown",
-                reply_markup=main_menu,
-            )
-    else:
-        bot.send_message(
-            message.chat.id,
-            caption,
-            parse_mode="Markdown",
-            reply_markup=main_menu,
-        )
 
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
