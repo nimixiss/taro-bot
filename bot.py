@@ -16,6 +16,10 @@ WEBAPP_URL = "https://nimixiss.github.io/tarot-webapp/"
 ADMIN_ID = 220493509  # это ты :)
 single_card_usage = {}  # {user_id: 'YYYY-MM-DD'}
 
+# Для режима с одной картой формируем «колоду», чтобы карты не повторялись,
+# пока не будут вытянуты все 78.
+_shuffled_single_card_deck: list[str] = []
+
 # === Загрузка данных ===
 with open("tarot_cards.json", "r", encoding="utf-8") as f:
     tarot_deck = json.load(f)
@@ -121,6 +125,17 @@ def _mark_single_card_used_today(user_id: int) -> None:
     today = datetime.utcnow().date().isoformat()
     single_card_usage[user_id] = today
 
+
+def _draw_random_card() -> str:
+    """Возвращает случайную карту, гарантируя равномерный обход колоды."""
+    global _shuffled_single_card_deck
+
+    if not _shuffled_single_card_deck:
+        _shuffled_single_card_deck = list(tarot_deck.keys())
+        random.shuffle(_shuffled_single_card_deck)
+
+    return _shuffled_single_card_deck.pop()
+
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
 def ask_single_card_topic(message):
     user_id = message.from_user.id
@@ -155,7 +170,8 @@ def send_single_card_with_topic(message, user_id: int):
         return
 
     # Тянем карту
-    card = random.choice(list(tarot_deck.keys()))
+    card = _draw_random_card()
+    _mark_single_card_used_today(user_id)
     category_key = TOPIC_TO_KEY[topic]
 
     # Берём значение по категории из tarot_topics
