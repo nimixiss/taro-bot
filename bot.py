@@ -62,8 +62,7 @@ TOPIC_TO_KEY = {
     "🧿 Совет дня": "advice",
 }
 
-with open("combinations.json", "r", encoding="utf-8") as f:
-    combinations_3cards = json.load(f)
+combinations_3cards = _load_json_file("combinations.json")
 
 TWO_CARDS_URL = "https://raw.githubusercontent.com/nimixiss/tarot-webapp/main/two_card_combinations_full.json"
 try:
