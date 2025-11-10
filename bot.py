@@ -6,12 +6,19 @@ import requests
 import time
 from datetime import datetime
 from telebot.apihelper import ApiTelegramException
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from telebot.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    WebAppInfo,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 
 # === Настройки ===
 TOKEN = os.getenv("BOT_TOKEN")
 CARDS_FOLDER = "images"
 WEBAPP_URL = "https://nimixiss.github.io/tarot-webapp/"
+CONSULTATION_URL = "https://t.me/helenatarotbot"
 
 ADMIN_ID = 220493509  # это ты :)
 single_card_usage = {}  # {user_id: 'YYYY-MM-DD'}
@@ -97,6 +104,27 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
     return markup
 
 
+def _build_consultation_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка с предложением личной консультации."""
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton(
+            "Получить консультацию за 100⭐️", url=CONSULTATION_URL
+        )
+    )
+    return markup
+
+
+def _send_consultation_offer(chat_id: int) -> None:
+    """Отправляет предложение о личной консультации."""
+    bot.send_message(
+        chat_id,
+        "💫 Хочешь разобрать вопрос глубже? Доступна личная консультация "
+        "с тарологом за 100 звёзд Telegram.",
+        reply_markup=_build_consultation_keyboard(),
+    )
+
+
 # === Главное меню ===
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -145,8 +173,11 @@ def ask_single_card_topic(message):
         bot.send_message(
             message.chat.id,
             "✨ Вселенная уже ответила тебе сегодня. "
-            "Приходи завтра, когда энергия обновится 🌙",
+            "Приходи завтра, когда энергия обновится 🌙\n\n"
+            "Хочешь глубже разобрать вопрос? Можешь заказать личную "
+            "консультацию за 100 звёзд Telegram.",
         )
+        _send_consultation_offer(message.chat.id)
         return
 
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -196,6 +227,9 @@ def send_single_card_with_topic(message, user_id: int):
     # Собираем главное меню обратно
     main_menu = _build_main_menu()
     _send_single_card_reply(message.chat.id, card, topic, meaning)
+
+    if user_id != ADMIN_ID:
+        _send_consultation_offer(message.chat.id)
 
 
 def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -> None:
