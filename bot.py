@@ -82,7 +82,6 @@ bot = telebot.TeleBot(TOKEN)
 
 def _build_main_menu() -> ReplyKeyboardMarkup:
     """Создаёт главное меню с раскладами."""
-
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         KeyboardButton("🃏 Одна карта"),
@@ -177,7 +176,10 @@ def send_single_card_with_topic(message, user_id: int):
 
     # Собираем главное меню обратно
     main_menu = _build_main_menu()
+    _send_single_card_reply(message.chat.id, card, topic, meaning)
 
+
+def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -> None:
     caption = (
         f"🃏 *{card}*\n"
         f"Сфера: {topic}\n"
@@ -188,19 +190,19 @@ def send_single_card_with_topic(message, user_id: int):
     if os.path.exists(path):
         with open(path, "rb") as photo:
             bot.send_photo(
-                message.chat.id,
+                chat_id,
                 photo,
                 caption=caption,
                 parse_mode="Markdown",
-                reply_markup=main_menu,
+                reply_markup=_build_main_menu(),
             )
-        return
+            return
 
     bot.send_message(
-        message.chat.id,
+        chat_id,
         caption,
         parse_mode="Markdown",
-        reply_markup=main_menu,
+        reply_markup=_build_main_menu(),
     )
 
 # === Три карты ===
@@ -236,46 +238,5 @@ def handle_web_app_data(message):
         bot.send_message(message.chat.id, f"Ошибка обработки: {e}")
 
 # === Запуск бота ===
-def _start_polling(
-    timeout: int = 60,
-    long_polling_timeout: int = 30,
-    *,
-    max_retries: int = 3,
-    retry_delay: int = 5,
-) -> None:
-    """Запускает polling, перехватывая конфликт 409 от Telegram."""
-
-    try:
-        bot.remove_webhook()
-    except ApiTelegramException as exc:
-        print(f"Не удалось снять webhook: {exc}", flush=True)
-
-    attempts = 0
-    while True:
-        try:
-            bot.polling(timeout=timeout, long_polling_timeout=long_polling_timeout)
-            return
-        except ApiTelegramException as exc:
-            if exc.error_code != 409:
-                raise
-
-            attempts += 1
-            print(
-                "Polling остановлен: обнаружен другой активный процесс бота. "
-                "Через несколько секунд попробуем снова...",
-                flush=True,
-            )
-
-            if attempts >= max_retries:
-                print(
-                    "Не удалось получить управление ботом. "
-                    "Убедись, что не осталось других запущенных экземпляров.",
-                    flush=True,
-                )
-                return
-
-            time.sleep(retry_delay)
-
-
 if __name__ == "__main__":
-    _start_polling()
+    bot.polling(timeout=60, long_polling_timeout=30)
