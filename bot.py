@@ -18,7 +18,7 @@ from telebot.types import (
 TOKEN = os.getenv("BOT_TOKEN")
 CARDS_FOLDER = "images"
 WEBAPP_URL = "https://nimixiss.github.io/tarot-webapp/"
-CONSULTATION_URL = "https://t.me/helenatarotbot"
+CONSULTATION_URL = "@helenatarotbot"
 
 ADMIN_ID = 220493509  # это ты :)
 single_card_usage = {}  # {user_id: 'YYYY-MM-DD'}
