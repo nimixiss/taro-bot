@@ -33,7 +33,7 @@ USAGE_STORAGE_PATH = os.path.join(BASE_DIR, "single_card_usage.json")
 STARS_PROVIDER_TOKEN = os.getenv("STARS_PROVIDER_TOKEN", "")
 
 CONSULTATION_PRICE_STARS = 100  # сколько звёзд стоит консультация
-CONSULTATION_PRICE_UNITS = CONSULTATION_PRICE_STARS * 100  # 1⭐️ = 100 минимальных единиц XTR
+CONSULTATION_PRICE_UNITS = CONSULTATION_PRICE_STARS  # 1⭐️ = 100 минимальных единиц XTR
 CONSULTATION_PAYLOAD = "consultation_stars_100"
 CONSULTATION_TITLE = "Личная консультация"
 CONSULTATION_DESCRIPTION = (
