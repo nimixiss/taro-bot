@@ -27,6 +27,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USAGE_STORAGE_PATH = os.path.join(BASE_DIR, "single_card_usage.json")
 STARS_PROVIDER_TOKEN = os.getenv("STARS_PROVIDER_TOKEN")
 CONSULTATION_PRICE_STARS = 100
+CONSULTATION_PRICE_UNITS = CONSULTATION_PRICE_STARS * 100  # 1⭐️ = 100 минимальных единиц XTR
 CONSULTATION_PAYLOAD = "consultation_stars_100"
 CONSULTATION_TITLE = "Личная консультация"
 CONSULTATION_DESCRIPTION = (
@@ -186,7 +187,7 @@ def _send_consultation_offer(chat_id: int) -> None:
         bot.send_message(
             chat_id,
             "💫 Хочешь разобрать вопрос глубже? Оплата консультации временно "
-            "недоступна через бота. Напиши напрямую в @helenatarotbot.",
+            "недоступна через бота. Как только она появится, я сразу дам знать!",
         )
         return
 
@@ -340,13 +341,13 @@ def handle_buy_consultation(call):
     if not STARS_PROVIDER_TOKEN:
         bot.answer_callback_query(
             call.id,
-            "Оплата временно недоступна. Напиши напрямую в @helenatarotbot.",
+            "Оплата временно недоступна. Пожалуйста, попробуй чуть позже.",
             show_alert=True,
         )
         return
 
     prices = [
-        LabeledPrice(label="Личная консультация", amount=CONSULTATION_PRICE_STARS)
+        LabeledPrice(label="Личная консультация", amount=CONSULTATION_PRICE_UNITS)
     ]
 
     try:
@@ -389,6 +390,15 @@ def process_pre_checkout_query(pre_checkout_query):
 def successful_payment_handler(message):
     payload = message.successful_payment.invoice_payload
     if payload != CONSULTATION_PAYLOAD:
+        return
+
+    payment = message.successful_payment
+    if payment.currency != "XTR" or payment.total_amount != CONSULTATION_PRICE_UNITS:
+        print(
+            "Получена успешная оплата с некорректными параметрами: "
+            f"currency={payment.currency}, amount={payment.total_amount}",
+            flush=True,
+        )
         return
 
     markup = InlineKeyboardMarkup()
