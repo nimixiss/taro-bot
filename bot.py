@@ -25,13 +25,19 @@ CONSULTATION_URL = "https://t.me/helenatarotbot"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USAGE_STORAGE_PATH = os.path.join(BASE_DIR, "single_card_usage.json")
-STARS_PROVIDER_TOKEN = os.getenv("STARS_PROVIDER_TOKEN")
-CONSULTATION_PRICE_STARS = 100
+
+# Для Telegram Stars при продаже цифровых услуг можно передавать
+# пустой provider_token – это корректно по официальной документации.
+# Если когда-нибудь захочешь использовать свой токен, можно
+# выставить его через переменную окружения.
+STARS_PROVIDER_TOKEN = os.getenv("STARS_PROVIDER_TOKEN", "")
+
+CONSULTATION_PRICE_STARS = 100  # сколько звёзд стоит консультация
 CONSULTATION_PRICE_UNITS = CONSULTATION_PRICE_STARS * 100  # 1⭐️ = 100 минимальных единиц XTR
 CONSULTATION_PAYLOAD = "consultation_stars_100"
 CONSULTATION_TITLE = "Личная консультация"
 CONSULTATION_DESCRIPTION = (
-    "Оплата консультации с тарологом за 100 звёзд Telegram. "
+    f"Оплата консультации с тарологом за {CONSULTATION_PRICE_STARS} звёзд Telegram. "
     "После успешной оплаты ты получишь ссылку на бот @helenatarotbot."
 )
 CONSULTATION_START_PARAMETER = "consultation"
@@ -131,6 +137,7 @@ def _collect_all_meanings(card_data):
 
     return []
 
+
 TOPIC_TO_KEY = {
     "❤️ Любовь": "love",
     "💼 Карьера": "career",
@@ -175,26 +182,25 @@ def _build_consultation_keyboard() -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton(
-            "Получить консультацию за 100⭐️", callback_data="buy_consultation"
+            f"Получить консультацию за {CONSULTATION_PRICE_STARS}⭐️",
+            callback_data="buy_consultation",
         )
     )
     return markup
 
 
 def _send_consultation_offer(chat_id: int) -> None:
-    """Отправляет предложение о личной консультации."""
-    if not STARS_PROVIDER_TOKEN:
-        bot.send_message(
-            chat_id,
-            "💫 Хочешь разобрать вопрос глубже? Оплата консультации временно "
-            "недоступна через бота. Как только она появится, я сразу дам знать!",
-        )
-        return
+    """
+    Отправляет предложение о личной консультации.
 
+    Даже если STARS_PROVIDER_TOKEN пустой, для цифровых услуг оплата
+    звёздами по доке Telegram разрешена, поэтому мы просто шлём инвойс
+    с тем, что есть.
+    """
     bot.send_message(
         chat_id,
-        "💫 Хочешь разобрать вопрос глубже? Доступна личная консультация "
-        "с тарологом за 100 звёзд Telegram.",
+        f"💫 Хочешь разобрать вопрос глубже? Доступна личная консультация "
+        f"с тарологом за {CONSULTATION_PRICE_STARS} звёзд Telegram.",
         reply_markup=_build_consultation_keyboard(),
     )
 
@@ -208,6 +214,7 @@ def send_welcome(message):
         reply_markup=_build_main_menu(),
     )
 
+
 # === Одна карта с лимитом и выбором темы ===
 
 SINGLE_CARD_TOPICS = [
@@ -218,11 +225,13 @@ SINGLE_CARD_TOPICS = [
     "🧿 Совет дня",
 ]
 
+
 def _has_used_single_card_today(user_id: int) -> bool:
     """Проверяем, тянул ли пользователь карту сегодня."""
     today = datetime.utcnow().date().isoformat()
     with _usage_lock:
         return single_card_usage.get(str(user_id)) == today
+
 
 def _mark_single_card_used_today(user_id: int) -> None:
     today = datetime.utcnow().date().isoformat()
@@ -241,6 +250,7 @@ def _draw_random_card() -> str:
 
     return _shuffled_single_card_deck.pop()
 
+
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
 def ask_single_card_topic(message):
     user_id = message.from_user.id
@@ -251,8 +261,8 @@ def ask_single_card_topic(message):
             message.chat.id,
             "✨ Вселенная уже ответила тебе сегодня. "
             "Приходи завтра, когда энергия обновится 🌙\n\n"
-            "Хочешь глубже разобрать вопрос? Можешь заказать личную "
-            "консультацию за 100 звёзд Telegram.",
+            f"Хочешь глубже разобрать вопрос? Можешь заказать личную "
+            f"консультацию за {CONSULTATION_PRICE_STARS} звёзд Telegram.",
         )
         _send_consultation_offer(message.chat.id)
         return
@@ -267,6 +277,8 @@ def ask_single_card_topic(message):
         reply_markup=markup,
     )
     bot.register_next_step_handler(msg, send_single_card_with_topic, user_id)
+
+
 def send_single_card_with_topic(message, user_id: int):
     topic = message.text
 
@@ -301,8 +313,6 @@ def send_single_card_with_topic(message, user_id: int):
         if isinstance(expanded_values, list):
             meaning_list = [value for value in expanded_values if isinstance(value, str)]
 
-    # Собираем главное меню обратно
-    main_menu = _build_main_menu()
     _send_single_card_reply(message.chat.id, card, topic, meaning)
 
     if user_id != ADMIN_ID:
@@ -336,18 +346,15 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
     )
 
 
+# === Оплата консультации звёздами ===
+
 @bot.callback_query_handler(func=lambda call: call.data == "buy_consultation")
 def handle_buy_consultation(call):
-    if not STARS_PROVIDER_TOKEN:
-        bot.answer_callback_query(
-            call.id,
-            "Оплата временно недоступна. Пожалуйста, попробуй чуть позже.",
-            show_alert=True,
-        )
-        return
-
     prices = [
-        LabeledPrice(label="Личная консультация", amount=CONSULTATION_PRICE_UNITS)
+        LabeledPrice(
+            label="Личная консультация",
+            amount=CONSULTATION_PRICE_UNITS,
+        )
     ]
 
     try:
@@ -356,7 +363,7 @@ def handle_buy_consultation(call):
             CONSULTATION_TITLE,
             CONSULTATION_DESCRIPTION,
             CONSULTATION_PAYLOAD,
-            STARS_PROVIDER_TOKEN,
+            STARS_PROVIDER_TOKEN,  # может быть пустой строкой – это ок
             "XTR",
             prices,
             start_parameter=CONSULTATION_START_PARAMETER,
@@ -415,6 +422,7 @@ def successful_payment_handler(message):
         reply_markup=markup,
     )
 
+
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
 def send_three_cards(message):
@@ -422,7 +430,12 @@ def send_three_cards(message):
     selected_cards = key.split("|")
     meaning = combinations_3cards[key]
     names = "\n".join([f"• {card}" for card in selected_cards])
-    bot.send_message(message.chat.id, f"🔮 *Три карты:*\n\n{names}\n\n{meaning}", parse_mode="Markdown")
+    bot.send_message(
+        message.chat.id,
+        f"🔮 *Три карты:*\n\n{names}\n\n{meaning}",
+        parse_mode="Markdown",
+    )
+
 
 # === Обработка WebApp данных ===
 @bot.message_handler(content_types=['web_app_data'])
@@ -446,6 +459,7 @@ def handle_web_app_data(message):
             bot.send_message(message.chat.id, "❌ Ошибка: трактовка не найдена.")
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка обработки: {e}")
+
 
 # === Запуск бота ===
 if __name__ == "__main__":
