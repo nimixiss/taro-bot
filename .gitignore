@@ -131,6 +131,9 @@ __pypackages__/
 celerybeat-schedule
 celerybeat.pid
 
+# Runtime storage
+single_card_usage.json
+
 # SageMath parsed files
 *.sage.py
 

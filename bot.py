@@ -4,6 +4,8 @@ import json
 import random
 import requests
 import time
+import threading
+from typing import Dict
 from datetime import datetime
 from telebot.apihelper import ApiTelegramException
 from telebot.types import (
@@ -12,16 +14,79 @@ from telebot.types import (
     WebAppInfo,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    LabeledPrice,
 )
 
 # === Настройки ===
 TOKEN = os.getenv("BOT_TOKEN")
 CARDS_FOLDER = "images"
 WEBAPP_URL = "https://nimixiss.github.io/tarot-webapp/"
-CONSULTATION_URL = "@helenatarotbot"
+CONSULTATION_URL = "https://t.me/helenatarotbot"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+USAGE_STORAGE_PATH = os.path.join(BASE_DIR, "single_card_usage.json")
+STARS_PROVIDER_TOKEN = os.getenv("STARS_PROVIDER_TOKEN")
+CONSULTATION_PRICE_STARS = 100
+CONSULTATION_PAYLOAD = "consultation_stars_100"
+CONSULTATION_TITLE = "Личная консультация"
+CONSULTATION_DESCRIPTION = (
+    "Оплата консультации с тарологом за 100 звёзд Telegram. "
+    "После успешной оплаты ты получишь ссылку на бот @helenatarotbot."
+)
+CONSULTATION_START_PARAMETER = "consultation"
+CONSULTATION_SUCCESS_MESSAGE = (
+    "✨ Благодарю за оплату! Чтобы продолжить, напиши в бот @helenatarotbot."
+)
 
 ADMIN_ID = 220493509  # это ты :)
-single_card_usage = {}  # {user_id: 'YYYY-MM-DD'}
+single_card_usage: Dict[str, str] = {}  # {user_id: 'YYYY-MM-DD'}
+_usage_lock = threading.Lock()
+
+
+def _load_single_card_usage() -> None:
+    """Загружает историю вытягивания карт из файла."""
+    global single_card_usage
+
+    if not os.path.exists(USAGE_STORAGE_PATH):
+        single_card_usage = {}
+        return
+
+    try:
+        with open(USAGE_STORAGE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"Не удалось загрузить историю вытягивания карт: {exc}",
+            flush=True,
+        )
+        single_card_usage = {}
+        return
+
+    if isinstance(data, dict):
+        single_card_usage = {
+            str(user_id): date_str
+            for user_id, date_str in data.items()
+            if isinstance(date_str, str)
+        }
+    else:
+        single_card_usage = {}
+
+
+def _save_single_card_usage() -> None:
+    """Сохраняет историю вытягивания карт в файл."""
+    try:
+        tmp_path = f"{USAGE_STORAGE_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(single_card_usage, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, USAGE_STORAGE_PATH)
+    except OSError as exc:
+        print(
+            f"Не удалось сохранить историю вытягивания карт: {exc}",
+            flush=True,
+        )
+
+
+_load_single_card_usage()
 
 # Для режима с одной картой формируем «колоду», чтобы карты не повторялись,
 # пока не будут вытянуты все 78.
@@ -109,7 +174,7 @@ def _build_consultation_keyboard() -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton(
-            "Получить консультацию за 100⭐️", url=CONSULTATION_URL
+            "Получить консультацию за 100⭐️", callback_data="buy_consultation"
         )
     )
     return markup
@@ -117,6 +182,14 @@ def _build_consultation_keyboard() -> InlineKeyboardMarkup:
 
 def _send_consultation_offer(chat_id: int) -> None:
     """Отправляет предложение о личной консультации."""
+    if not STARS_PROVIDER_TOKEN:
+        bot.send_message(
+            chat_id,
+            "💫 Хочешь разобрать вопрос глубже? Оплата консультации временно "
+            "недоступна через бота. Напиши напрямую в @helenatarotbot.",
+        )
+        return
+
     bot.send_message(
         chat_id,
         "💫 Хочешь разобрать вопрос глубже? Доступна личная консультация "
@@ -147,11 +220,14 @@ SINGLE_CARD_TOPICS = [
 def _has_used_single_card_today(user_id: int) -> bool:
     """Проверяем, тянул ли пользователь карту сегодня."""
     today = datetime.utcnow().date().isoformat()
-    return single_card_usage.get(user_id) == today
+    with _usage_lock:
+        return single_card_usage.get(str(user_id)) == today
 
 def _mark_single_card_used_today(user_id: int) -> None:
     today = datetime.utcnow().date().isoformat()
-    single_card_usage[user_id] = today
+    with _usage_lock:
+        single_card_usage[str(user_id)] = today
+        _save_single_card_usage()
 
 
 def _draw_random_card() -> str:
@@ -256,6 +332,77 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
         caption,
         parse_mode="Markdown",
         reply_markup=_build_main_menu(),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "buy_consultation")
+def handle_buy_consultation(call):
+    if not STARS_PROVIDER_TOKEN:
+        bot.answer_callback_query(
+            call.id,
+            "Оплата временно недоступна. Напиши напрямую в @helenatarotbot.",
+            show_alert=True,
+        )
+        return
+
+    prices = [
+        LabeledPrice(label="Личная консультация", amount=CONSULTATION_PRICE_STARS)
+    ]
+
+    try:
+        bot.send_invoice(
+            call.message.chat.id,
+            CONSULTATION_TITLE,
+            CONSULTATION_DESCRIPTION,
+            CONSULTATION_PAYLOAD,
+            STARS_PROVIDER_TOKEN,
+            "XTR",
+            prices,
+            start_parameter=CONSULTATION_START_PARAMETER,
+        )
+    except ApiTelegramException as exc:
+        bot.answer_callback_query(
+            call.id,
+            "Не удалось открыть оплату. Попробуй ещё раз чуть позже.",
+            show_alert=True,
+        )
+        print(f"Ошибка отправки счёта: {exc}", flush=True)
+        return
+
+    bot.answer_callback_query(call.id)
+
+
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def process_pre_checkout_query(pre_checkout_query):
+    if pre_checkout_query.invoice_payload != CONSULTATION_PAYLOAD:
+        bot.answer_pre_checkout_query(
+            pre_checkout_query.id,
+            ok=False,
+            error_message="Не удалось обработать оплату. Попробуй позже.",
+        )
+        return
+
+    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+
+@bot.message_handler(content_types=['successful_payment'])
+def successful_payment_handler(message):
+    payload = message.successful_payment.invoice_payload
+    if payload != CONSULTATION_PAYLOAD:
+        return
+
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton(
+            "Перейти к консультации",
+            url=CONSULTATION_URL,
+        )
+    )
+
+    bot.send_message(
+        message.chat.id,
+        CONSULTATION_SUCCESS_MESSAGE,
+        reply_markup=markup,
     )
 
 # === Три карты ===
