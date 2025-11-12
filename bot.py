@@ -156,60 +156,87 @@ def _normalize_two_card_key(card1: str, card2: str) -> str:
     return "|".join(sorted([card1.strip(), card2.strip()]))
 
 
+def _split_two_card_key(key: str) -> list[str]:
+    """Разбивает ключ расклада на названия карт."""
+
+    if "|" in key:
+        parts = key.split("|")
+    elif "," in key:
+        parts = key.split(",")
+    else:
+        parts = key.split()
+
+    return [part.strip() for part in parts if isinstance(part, str) and part.strip()]
+
+
+def _extract_two_card_meaning(value) -> str | None:
+    """Достаёт текст толкования из разных структур данных."""
+
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+
+    if isinstance(value, dict):
+        for key in ("meaning", "text", "description", "value"):
+            nested = value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+
+    return None
+
+
 def _normalize_two_card_combinations(raw_data) -> Dict[str, str]:
     """Приводит данные раскладов на две карты к словарю."""
 
     normalized: Dict[str, str] = {}
 
-    if isinstance(raw_data, dict):
-        for key, value in raw_data.items():
-            if not isinstance(key, str):
-                continue
+    def _add_pair(card1: str, card2: str, meaning: str) -> None:
+        if not (isinstance(card1, str) and isinstance(card2, str) and isinstance(meaning, str)):
+            return
 
-            meaning = None
-            if isinstance(value, str):
-                meaning = value.strip()
-            elif isinstance(value, dict):
-                meaning_value = value.get("meaning")
-                if isinstance(meaning_value, str):
-                    meaning = meaning_value.strip()
+        card1 = card1.strip()
+        card2 = card2.strip()
+        meaning = meaning.strip()
 
-            if not meaning:
-                continue
+        if not card1 or not card2 or not meaning:
+            return
 
-            if "|" in key:
-                parts = key.split("|", 1)
-            elif "," in key:
-                parts = key.split(",", 1)
+        normalized[_normalize_two_card_key(card1, card2)] = meaning
+
+    def _process(obj) -> None:
+        if isinstance(obj, dict):
+            cards_field = obj.get("cards")
+            meaning_field = _extract_two_card_meaning(obj)
+
+            if isinstance(cards_field, (list, tuple)) and len(cards_field) >= 2 and meaning_field:
+                cards = [
+                    card for card in cards_field if isinstance(card, str) and card.strip()
+                ]
+                if len(cards) >= 2:
+                    _add_pair(cards[0], cards[1], meaning_field)
+
             else:
-                parts = key.split()
+                card1 = obj.get("card1")
+                card2 = obj.get("card2")
+                if isinstance(card1, str) and isinstance(card2, str) and meaning_field:
+                    _add_pair(card1, card2, meaning_field)
 
-            if len(parts) != 2:
-                continue
+            for key, value in obj.items():
+                if isinstance(key, str):
+                    parts = _split_two_card_key(key)
+                    if len(parts) == 2:
+                        meaning = _extract_two_card_meaning(value)
+                        if meaning:
+                            _add_pair(parts[0], parts[1], meaning)
+                            continue
 
-            normalized[_normalize_two_card_key(parts[0], parts[1])] = meaning
+                _process(value)
 
-    elif isinstance(raw_data, list):
-        for item in raw_data:
-            if not isinstance(item, dict):
-                continue
+        elif isinstance(obj, list):
+            for item in obj:
+                _process(item)
 
-            cards = item.get("cards")
-            meaning = item.get("meaning")
-
-            if not isinstance(cards, (list, tuple)) or len(cards) != 2:
-                card1 = item.get("card1")
-                card2 = item.get("card2")
-                cards = [card1, card2]
-
-            if not isinstance(meaning, str):
-                continue
-
-            card1, card2 = cards
-            if not isinstance(card1, str) or not isinstance(card2, str):
-                continue
-
-            normalized[_normalize_two_card_key(card1, card2)] = meaning.strip()
+    _process(raw_data)
 
     return normalized
 
