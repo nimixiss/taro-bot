@@ -346,6 +346,24 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
     )
 
 
+def _draw_random_two_card_combination():
+    """Возвращает случайную комбинацию для расклада на две карты."""
+    if not combinations_2cards:
+        return None
+
+    key = random.choice(list(combinations_2cards.keys()))
+    cards = key.split("|", 1)
+    if len(cards) != 2:
+        return None
+
+    card1, card2 = cards
+    meaning = combinations_2cards.get(key)
+    if not isinstance(meaning, str):
+        return None
+
+    return card1, card2, meaning
+
+
 # === Оплата консультации звёздами ===
 
 @bot.callback_query_handler(func=lambda call: call.data == "buy_consultation")
@@ -445,8 +463,42 @@ def handle_web_app_data(message):
         card1 = data.get("card1")
         card2 = data.get("card2")
 
+        user_id = getattr(getattr(message, "from_user", None), "id", None)
+
+        limit_flags = [
+            "limit_exceeded",
+            "limitExceeded",
+            "daily_limit",
+            "dailyLimit",
+        ]
+        limit_detected = any(bool(data.get(flag)) for flag in limit_flags)
+
+        error_value = data.get("error")
+        if isinstance(error_value, str) and "limit" in error_value.lower():
+            limit_detected = True
+
         if not card1 or not card2:
-            bot.send_message(message.chat.id, "Ошибка: не удалось получить карты.")
+            if user_id == ADMIN_ID:
+                fallback = _draw_random_two_card_combination()
+                if fallback:
+                    card1, card2, meaning = fallback
+                    response = (
+                        "🧿 *Две карты:*\n\n"
+                        f"• {card1}\n"
+                        f"• {card2}\n\n"
+                        f"{meaning}"
+                    )
+                    bot.send_message(message.chat.id, response, parse_mode="Markdown")
+                    return
+
+            if limit_detected:
+                bot.send_message(
+                    message.chat.id,
+                    "✨ Сегодня лимит на расклад из двух карт уже исчерпан. "
+                    "Попробуй снова завтра.",
+                )
+            else:
+                bot.send_message(message.chat.id, "Ошибка: не удалось получить карты.")
             return
 
         sorted_key = "|".join(sorted([card1, card2]))
@@ -456,6 +508,19 @@ def handle_web_app_data(message):
             response = f"🧿 *Две карты:*\n\n• {card1}\n• {card2}\n\n{meaning}"
             bot.send_message(message.chat.id, response, parse_mode="Markdown")
         else:
+            if user_id == ADMIN_ID:
+                fallback = _draw_random_two_card_combination()
+                if fallback:
+                    card1, card2, meaning = fallback
+                    response = (
+                        "🧿 *Две карты:*\n\n"
+                        f"• {card1}\n"
+                        f"• {card2}\n\n"
+                        f"{meaning}"
+                    )
+                    bot.send_message(message.chat.id, response, parse_mode="Markdown")
+                    return
+
             bot.send_message(message.chat.id, "❌ Ошибка: трактовка не найдена.")
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка обработки: {e}")
