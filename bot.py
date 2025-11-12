@@ -149,17 +149,133 @@ TOPIC_TO_KEY = {
 with open("combinations.json", "r", encoding="utf-8") as f:
     combinations_3cards = json.load(f)
 
+
+def _normalize_two_card_key(card1: str, card2: str) -> str:
+    """Возвращает ключ для двух карт в отсортированном виде."""
+
+    return "|".join(sorted([card1.strip(), card2.strip()]))
+
+
+def _normalize_two_card_combinations(raw_data) -> Dict[str, str]:
+    """Приводит данные раскладов на две карты к словарю."""
+
+    normalized: Dict[str, str] = {}
+
+    if isinstance(raw_data, dict):
+        for key, value in raw_data.items():
+            if not isinstance(key, str):
+                continue
+
+            meaning = None
+            if isinstance(value, str):
+                meaning = value.strip()
+            elif isinstance(value, dict):
+                meaning_value = value.get("meaning")
+                if isinstance(meaning_value, str):
+                    meaning = meaning_value.strip()
+
+            if not meaning:
+                continue
+
+            if "|" in key:
+                parts = key.split("|", 1)
+            elif "," in key:
+                parts = key.split(",", 1)
+            else:
+                parts = key.split()
+
+            if len(parts) != 2:
+                continue
+
+            normalized[_normalize_two_card_key(parts[0], parts[1])] = meaning
+
+    elif isinstance(raw_data, list):
+        for item in raw_data:
+            if not isinstance(item, dict):
+                continue
+
+            cards = item.get("cards")
+            meaning = item.get("meaning")
+
+            if not isinstance(cards, (list, tuple)) or len(cards) != 2:
+                card1 = item.get("card1")
+                card2 = item.get("card2")
+                cards = [card1, card2]
+
+            if not isinstance(meaning, str):
+                continue
+
+            card1, card2 = cards
+            if not isinstance(card1, str) or not isinstance(card2, str):
+                continue
+
+            normalized[_normalize_two_card_key(card1, card2)] = meaning.strip()
+
+    return normalized
+
+
 TWO_CARDS_URL = "https://raw.githubusercontent.com/nimixiss/tarot-webapp/main/two_card_combinations_full.json"
 try:
     response = requests.get(TWO_CARDS_URL, timeout=15)
     response.raise_for_status()
-    combinations_2cards = response.json()
+    combinations_2cards_raw = response.json()
+    combinations_2cards = _normalize_two_card_combinations(combinations_2cards_raw)
 except requests.RequestException as exc:
     combinations_2cards = {}
     print(
         f"Не удалось загрузить комбинации для двух карт: {exc}",
         flush=True,
     )
+
+
+def _get_two_card_meaning(card1: str, card2: str) -> str | None:
+    """Возвращает толкование для пары карт, если оно известно."""
+
+    if not (isinstance(card1, str) and isinstance(card2, str)):
+        return None
+
+    key = _normalize_two_card_key(card1, card2)
+    meaning = combinations_2cards.get(key)
+    if isinstance(meaning, str) and meaning.strip():
+        return meaning
+
+    return None
+
+
+def _pick_random_card_meaning(card_name: str) -> str | None:
+    """Возвращает случайное значение для отдельной карты."""
+
+    data = tarot_deck.get(card_name)
+    meanings = _collect_all_meanings(data)
+    if meanings:
+        return random.choice(meanings)
+
+    return None
+
+
+def _draw_general_two_card_fallback() -> tuple[str, str, str] | None:
+    """Создаёт толкование по отдельным картам, если комбинаций нет."""
+
+    deck_cards = [card for card in tarot_deck.keys() if isinstance(card, str)]
+    if len(deck_cards) < 2:
+        return None
+
+    card1, card2 = random.sample(deck_cards, 2)
+    meaning1 = _pick_random_card_meaning(card1)
+    meaning2 = _pick_random_card_meaning(card2)
+
+    parts = ["(Резервное толкование по отдельным картам)"]
+    if meaning1:
+        parts.append(f"• {card1}: {meaning1}")
+    else:
+        parts.append(f"• {card1}: значение не найдено.")
+
+    if meaning2:
+        parts.append(f"• {card2}: {meaning2}")
+    else:
+        parts.append(f"• {card2}: значение не найдено.")
+
+    return card1, card2, "\n".join(parts)
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -346,6 +462,48 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
     )
 
 
+def _send_two_card_message(chat_id: int, card1: str, card2: str, meaning: str) -> None:
+    """Отправляет сообщение с раскладом на две карты."""
+
+    message = (
+        "🧿 *Две карты:*\n\n"
+        f"• {card1}\n"
+        f"• {card2}\n\n"
+        f"{meaning}"
+    )
+
+    bot.send_message(chat_id, message, parse_mode="Markdown")
+
+
+def _draw_random_two_card_combination() -> tuple[str, str, str] | None:
+    """Возвращает случайную комбинацию для расклада на две карты."""
+
+    if combinations_2cards:
+        key, meaning = random.choice(list(combinations_2cards.items()))
+        cards = key.split("|", 1)
+        if len(cards) == 2 and isinstance(meaning, str):
+            return cards[0], cards[1], meaning
+
+    return _draw_general_two_card_fallback()
+
+
+def _generate_two_card_override(
+    card1: str | None = None, card2: str | None = None
+) -> tuple[str, str, str] | None:
+    """Возвращает расклад для двух карт, игнорируя лимиты веб-приложения."""
+
+    if card1 and card2:
+        meaning = _get_two_card_meaning(card1, card2)
+        if meaning:
+            return card1, card2, meaning
+
+    fallback = _draw_random_two_card_combination()
+    if fallback:
+        return fallback
+
+    return None
+
+
 # === Оплата консультации звёздами ===
 
 @bot.callback_query_handler(func=lambda call: call.data == "buy_consultation")
@@ -446,16 +604,26 @@ def handle_web_app_data(message):
         card2 = data.get("card2")
 
         if not card1 or not card2:
+            override = _generate_two_card_override()
+            if override:
+                card1, card2, meaning = override
+                _send_two_card_message(message.chat.id, card1, card2, meaning)
+                return
+
             bot.send_message(message.chat.id, "Ошибка: не удалось получить карты.")
             return
 
-        sorted_key = "|".join(sorted([card1, card2]))
-        meaning = combinations_2cards.get(sorted_key)
+        meaning = _get_two_card_meaning(card1, card2)
 
         if meaning:
-            response = f"🧿 *Две карты:*\n\n• {card1}\n• {card2}\n\n{meaning}"
-            bot.send_message(message.chat.id, response, parse_mode="Markdown")
+            _send_two_card_message(message.chat.id, card1, card2, meaning)
         else:
+            override = _generate_two_card_override(card1, card2)
+            if override:
+                card1, card2, meaning = override
+                _send_two_card_message(message.chat.id, card1, card2, meaning)
+                return
+
             bot.send_message(message.chat.id, "❌ Ошибка: трактовка не найдена.")
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка обработки: {e}")
