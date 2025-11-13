@@ -45,6 +45,7 @@ CONSULTATION_SUCCESS_MESSAGE = (
     "✨ Благодарю за оплату! Чтобы продолжить, напиши в бот @helenatarotbot."
 )
 CONSULTATION_MENU_LABEL = "💫 Расклад с тарологом за 100⭐️"
+BACK_TO_MENU_LABEL = "⬅️ Назад"
 
 ADMIN_ID = 220493509  # это ты :)
 single_card_usage: Dict[str, str] = {}  # {user_id: 'YYYY-MM-DD'}
@@ -396,6 +397,7 @@ def _build_topic_selection_keyboard() -> ReplyKeyboardMarkup:
     for row in _TOPIC_SELECTION_LAYOUT:
         buttons = [KeyboardButton(title) for title in row]
         markup.add(*buttons)
+    markup.add(KeyboardButton(BACK_TO_MENU_LABEL))
     return markup
 
 
@@ -508,6 +510,14 @@ def show_consultation_offer(message):
 
 def send_single_card_with_topic(message, user_id: int):
     topic = message.text
+
+    if topic == BACK_TO_MENU_LABEL:
+        bot.send_message(
+            message.chat.id,
+            "Возвращаемся в главное меню 🌙",
+            reply_markup=_build_main_menu(),
+        )
+        return
 
     if topic not in SINGLE_CARD_TOPICS:
         bot.send_message(
@@ -681,6 +691,14 @@ def ask_three_card_topic(message):
 
 def send_three_cards_with_topic(message):
     topic = message.text
+
+    if topic == BACK_TO_MENU_LABEL:
+        bot.send_message(
+            message.chat.id,
+            "Возвращаемся в главное меню 🌙",
+            reply_markup=_build_main_menu(),
+        )
+        return
 
     if topic not in SINGLE_CARD_TOPICS:
         prompt = bot.send_message(
