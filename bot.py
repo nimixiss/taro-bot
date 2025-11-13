@@ -44,6 +44,7 @@ CONSULTATION_START_PARAMETER = "consultation"
 CONSULTATION_SUCCESS_MESSAGE = (
     "✨ Благодарю за оплату! Чтобы продолжить, напиши в бот @helenatarotbot."
 )
+CONSULTATION_MENU_LABEL = "💫 Расклад с тарологом за 100⭐️"
 
 ADMIN_ID = 220493509  # это ты :)
 single_card_usage: Dict[str, str] = {}  # {user_id: 'YYYY-MM-DD'}
@@ -147,13 +148,73 @@ TOPIC_TO_KEY = {
 }
 
 with open("combinations.json", "r", encoding="utf-8") as f:
-    combinations_3cards = json.load(f)
+    _raw_three_card_data = json.load(f)
+
+
+def _normalize_three_card_combinations(raw_data) -> tuple[Dict[str, dict[str, str]], list[tuple[str, str]]]:
+    """Подготавливает расклады на три карты и формирует общий пул."""
+
+    normalized: Dict[str, dict[str, str]] = {}
+    fallback_pool: list[tuple[str, str]] = []
+
+    if not isinstance(raw_data, dict):
+        return normalized, fallback_pool
+
+    for topic_key, topic_data in raw_data.items():
+        if not (isinstance(topic_key, str) and isinstance(topic_data, dict)):
+            continue
+
+        topic_combinations: dict[str, str] = {}
+        for combo_key, meaning in topic_data.items():
+            if not (isinstance(combo_key, str) and isinstance(meaning, str)):
+                continue
+
+            cards = [part.strip() for part in combo_key.split("|") if isinstance(part, str) and part.strip()]
+            if len(cards) != 3:
+                continue
+
+            normalized_key = "|".join(cards)
+            clean_meaning = meaning.strip()
+            topic_combinations[normalized_key] = clean_meaning
+            fallback_pool.append((normalized_key, clean_meaning))
+
+        if topic_combinations:
+            normalized[topic_key] = topic_combinations
+
+    return normalized, fallback_pool
+
+
+combinations_3cards_by_topic, _three_card_fallback_pool = _normalize_three_card_combinations(
+    _raw_three_card_data
+)
 
 
 def _normalize_two_card_key(card1: str, card2: str) -> str:
     """Возвращает ключ для двух карт в отсортированном виде."""
 
     return "|".join(sorted([card1.strip(), card2.strip()]))
+
+
+def _draw_three_card_reading(topic_key: str) -> tuple[list[str], str] | None:
+    """Выбирает расклад из трёх карт по теме или из общего пула."""
+
+    topic_combinations = combinations_3cards_by_topic.get(topic_key)
+
+    if isinstance(topic_combinations, dict) and topic_combinations:
+        entries = list(topic_combinations.items())
+    else:
+        entries = list(_three_card_fallback_pool)
+
+    if not entries:
+        return None
+
+    combo_key, meaning = random.choice(entries)
+    cards = [part.strip() for part in combo_key.split("|") if part.strip()]
+
+    if len(cards) != 3:
+        return None
+
+    return cards, meaning
 
 
 def _split_two_card_key(key: str) -> list[str]:
@@ -317,6 +378,17 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
     markup.add(
         KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
     )
+    markup.add(KeyboardButton(CONSULTATION_MENU_LABEL))
+    return markup
+
+
+def _build_topic_selection_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура с выбором тематики расклада."""
+
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton("❤️ Любовь"), KeyboardButton("💼 Карьера"))
+    markup.add(KeyboardButton("💰 Финансы"), KeyboardButton("🧘‍♀️ Здоровье"))
+    markup.add(KeyboardButton("🧿 Совет дня"))
     return markup
 
 
@@ -410,16 +482,18 @@ def ask_single_card_topic(message):
         _send_consultation_offer(message.chat.id)
         return
 
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton("❤️ Любовь"), KeyboardButton("💼 Карьера"))
-    markup.add(KeyboardButton("💰 Финансы"), KeyboardButton("🧘‍♀️ Здоровье"))
-    markup.add(KeyboardButton("🧿 Совет дня"))
     msg = bot.send_message(
         message.chat.id,
         "Выбери сферу, о которой хочешь спросить:",
-        reply_markup=markup,
+        reply_markup=_build_topic_selection_keyboard(),
     )
     bot.register_next_step_handler(msg, send_single_card_with_topic, user_id)
+
+
+@bot.message_handler(func=lambda msg: msg.text == CONSULTATION_MENU_LABEL)
+def show_consultation_offer(message):
+    """Показывает предложение консультации из главного меню."""
+    _send_consultation_offer(message.chat.id)
 
 
 def send_single_card_with_topic(message, user_id: int):
@@ -586,15 +660,45 @@ def successful_payment_handler(message):
 
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
-def send_three_cards(message):
-    key = random.choice(list(combinations_3cards.keys()))
-    selected_cards = key.split("|")
-    meaning = combinations_3cards[key]
-    names = "\n".join([f"• {card}" for card in selected_cards])
+def ask_three_card_topic(message):
+    prompt = bot.send_message(
+        message.chat.id,
+        "Выбери сферу для расклада из трёх карт:",
+        reply_markup=_build_topic_selection_keyboard(),
+    )
+    bot.register_next_step_handler(prompt, send_three_cards_with_topic)
+
+
+def send_three_cards_with_topic(message):
+    topic = message.text
+
+    if topic not in SINGLE_CARD_TOPICS:
+        prompt = bot.send_message(
+            message.chat.id,
+            "Я жду выбор одной из сфер: любовь, карьера, финансы, здоровье или совет дня 💫",
+            reply_markup=_build_topic_selection_keyboard(),
+        )
+        bot.register_next_step_handler(prompt, send_three_cards_with_topic)
+        return
+
+    topic_key = TOPIC_TO_KEY.get(topic)
+    result = _draw_three_card_reading(topic_key) if topic_key else None
+
+    if not result:
+        bot.send_message(
+            message.chat.id,
+            "Не удалось подобрать расклад. Попробуй ещё раз чуть позже.",
+            reply_markup=_build_main_menu(),
+        )
+        return
+
+    cards, meaning = result
+    names = "\n".join(f"• {card}" for card in cards)
     bot.send_message(
         message.chat.id,
-        f"🔮 *Три карты:*\n\n{names}\n\n{meaning}",
+        f"🔮 *Три карты — {topic}:*\n\n{names}\n\n{meaning}",
         parse_mode="Markdown",
+        reply_markup=_build_main_menu(),
     )
 
 
