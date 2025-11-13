@@ -1,4 +1,5 @@
 import csv
+import html
 import io
 import os
 import telebot
@@ -50,6 +51,7 @@ CONSULTATION_SUCCESS_MESSAGE = (
 )
 CONSULTATION_MENU_LABEL = "💫 Расклад с тарологом за 100⭐️"
 BACK_TO_MENU_LABEL = "⬅️ Назад"
+CARD_OF_DAY_BUTTON_LABEL = "🗓️ Карта дня"
 
 ADMIN_ID = 220493509  # это ты :)
 READING_TYPE_SINGLE = "single"
@@ -340,6 +342,30 @@ TOPIC_TO_KEY = {
 with open("combinations.json", "r", encoding="utf-8") as f:
     _raw_three_card_data = json.load(f)
 
+CARD_OF_DAY_FILE = "cardoftheday.json"
+try:
+    with open(CARD_OF_DAY_FILE, "r", encoding="utf-8") as f:
+        raw_card_of_day_data = json.load(f)
+    if isinstance(raw_card_of_day_data, dict):
+        card_of_day_schedule: Dict[str, Dict[str, str]] = {}
+        for date_key, payload in raw_card_of_day_data.items():
+            if not isinstance(date_key, str):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            card = payload.get("card")
+            meaning = payload.get("meaning")
+            if isinstance(card, str) and isinstance(meaning, str):
+                card_of_day_schedule[date_key.strip()] = {
+                    "card": card.strip(),
+                    "meaning": meaning.strip(),
+                }
+    else:
+        card_of_day_schedule = {}
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"Не удалось загрузить карты дня: {exc}", flush=True)
+    card_of_day_schedule = {}
+
 YES_NO_FILE = "yesnot.json"
 if os.path.exists(YES_NO_FILE):
     try:
@@ -452,7 +478,7 @@ def _normalize_card_key(name: str) -> str:
     return name.strip().lower().replace("ё", "е")
 
 
-def _get_yes_no_image_basename(card_name: str) -> str | None:
+def _get_card_image_basename(card_name: str) -> str | None:
     normalized = _normalize_card_key(card_name)
 
     major = _MAJOR_ARCANA_IMAGE_MAP.get(normalized)
@@ -475,8 +501,8 @@ def _get_yes_no_image_basename(card_name: str) -> str | None:
     return None
 
 
-def _get_yes_no_image_path(card_name: str) -> str | None:
-    basename = _get_yes_no_image_basename(card_name)
+def _get_card_image_path(card_name: str) -> str | None:
+    basename = _get_card_image_basename(card_name)
     if not basename:
         return None
 
@@ -702,6 +728,7 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
         KeyboardButton("🔮 Три карты"),
         KeyboardButton(YES_NO_BUTTON_LABEL),
     )
+    markup.add(KeyboardButton(CARD_OF_DAY_BUTTON_LABEL))
     markup.add(KeyboardButton(CONSULTATION_MENU_LABEL))
     return markup
 
@@ -752,6 +779,49 @@ def _send_consultation_offer(chat_id: int) -> None:
         f"💫 Хочешь разобрать вопрос глубже? Доступна личная консультация "
         f"с тарологом за {CONSULTATION_PRICE_STARS} звёзд Telegram.",
         reply_markup=_build_consultation_keyboard(),
+    )
+
+
+def _get_card_of_day_for_date(date: datetime | None = None) -> tuple[str, str] | None:
+    target_date = (date or datetime.utcnow().date()).isoformat()
+    payload = card_of_day_schedule.get(target_date)
+
+    if not isinstance(payload, dict):
+        return None
+
+    card = payload.get("card")
+    meaning = payload.get("meaning")
+
+    if isinstance(card, str) and isinstance(meaning, str):
+        return card, meaning
+
+    return None
+
+
+def _send_card_of_day_message(chat_id: int, card: str, meaning: str) -> None:
+    caption = (
+        "🗓️ <b>Карта дня</b>\n"
+        f"<b>{html.escape(card)}</b>\n\n"
+        f"{html.escape(meaning)}"
+    )
+
+    path = _get_card_image_path(card)
+    if path:
+        with open(path, "rb") as photo:
+            bot.send_photo(
+                chat_id,
+                photo,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=_build_main_menu(),
+            )
+        return
+
+    bot.send_message(
+        chat_id,
+        caption,
+        parse_mode="HTML",
+        reply_markup=_build_main_menu(),
     )
 
 
@@ -1114,6 +1184,29 @@ def prompt_yes_no_reading(message):
     )
 
 
+@bot.message_handler(func=lambda msg: msg.text == CARD_OF_DAY_BUTTON_LABEL)
+def handle_card_of_day_button(message):
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        user_id = getattr(getattr(message, "chat", None), "id", None)
+
+    _register_user_id(user_id)
+
+    result = _get_card_of_day_for_date()
+
+    if result is None:
+        bot.send_message(
+            message.chat.id,
+            "✨ На сегодня карта дня ещё не готова. Загляни позже!",
+            reply_markup=_build_main_menu(),
+        )
+        return
+
+    card, meaning = result
+    _send_card_of_day_message(message.chat.id, card, meaning)
+
+
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
 def ask_single_card_topic(message):
     _increment_daily_event(DAILY_EVENT_SINGLE_CARD_BUTTON)
@@ -1204,8 +1297,8 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
         f"_{meaning}_"
     )
 
-    path = os.path.join(CARDS_FOLDER, f"{card}.png")
-    if os.path.exists(path):
+    path = _get_card_image_path(card)
+    if path:
         with open(path, "rb") as photo:
             bot.send_photo(
                 chat_id,
@@ -1266,7 +1359,7 @@ def handle_yes_no_callback(call):
 
     card, answer = result
     caption = f"🎯 *{card}*\nОтвет: *{answer}*"
-    image_path = _get_yes_no_image_path(card)
+    image_path = _get_card_image_path(card)
     message = getattr(call, "message", None)
 
     bot.answer_callback_query(call.id, text="✨ Ответ готов!")
