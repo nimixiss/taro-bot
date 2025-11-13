@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import telebot
 import json
@@ -25,6 +27,7 @@ CONSULTATION_URL = "https://t.me/helenatarotbot"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USAGE_STORAGE_PATH = os.path.join(BASE_DIR, "single_card_usage.json")
+STATS_DIR = os.path.join(BASE_DIR, "stats")
 
 # Для Telegram Stars при продаже цифровых услуг можно передавать
 # пустой provider_token – это корректно по официальной документации.
@@ -54,6 +57,25 @@ READING_TYPE_THREE_CARDS = "three_cards"
 
 single_card_usage: Dict[str, Dict[str, str]] = {}
 _usage_lock = threading.Lock()
+_daily_stats: Dict[str, Dict[str, int]] = {}
+
+
+DAILY_EVENT_START = "start"
+DAILY_EVENT_SINGLE_CARD_BUTTON = "single_card_button"
+DAILY_EVENT_SINGLE_CARD_READING = "single_card_reading"
+DAILY_EVENT_TWO_CARDS_READING = "two_cards_reading"
+DAILY_EVENT_THREE_CARDS_BUTTON = "three_cards_button"
+DAILY_EVENT_THREE_CARDS_READING = "three_cards_reading"
+
+
+DAILY_EVENT_LABELS = {
+    DAILY_EVENT_START: "запуски /start",
+    DAILY_EVENT_SINGLE_CARD_BUTTON: "нажатия на одну карту",
+    DAILY_EVENT_SINGLE_CARD_READING: "завершённые расклады на одну карту",
+    DAILY_EVENT_TWO_CARDS_READING: "расклады на две карты",
+    DAILY_EVENT_THREE_CARDS_BUTTON: "нажатия на три карты",
+    DAILY_EVENT_THREE_CARDS_READING: "расклады на три карты",
+}
 
 
 def _load_single_card_usage() -> None:
@@ -112,6 +134,163 @@ def _save_single_card_usage() -> None:
 
 
 _load_single_card_usage()
+
+
+def _get_daily_stats_file_path(date_str: str) -> str:
+    return os.path.join(STATS_DIR, f"{date_str}.json")
+
+
+def _load_daily_stats_for_date(date_str: str) -> dict[str, int]:
+    path = _get_daily_stats_file_path(date_str)
+
+    if not os.path.exists(path):
+        return {}
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"Не удалось загрузить статистику за {date_str}: {exc}",
+            flush=True,
+        )
+        return {}
+
+    if not isinstance(raw_data, dict):
+        return {}
+
+    normalized: dict[str, int] = {}
+    for key, value in raw_data.items():
+        if isinstance(key, str) and isinstance(value, int):
+            normalized[key] = value
+
+    return normalized
+
+
+def _save_daily_stats(date_str: str, data: dict[str, int]) -> None:
+    path = _get_daily_stats_file_path(date_str)
+    tmp_path = f"{path}.tmp"
+
+    try:
+        os.makedirs(STATS_DIR, exist_ok=True)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        print(
+            f"Не удалось сохранить статистику за {date_str}: {exc}",
+            flush=True,
+        )
+
+
+def _initialize_daily_stats() -> None:
+    try:
+        os.makedirs(STATS_DIR, exist_ok=True)
+    except OSError as exc:
+        print(f"Не удалось создать директорию статистики: {exc}", flush=True)
+        return
+
+    today = datetime.utcnow().date().isoformat()
+    with _usage_lock:
+        _daily_stats[today] = _load_daily_stats_for_date(today)
+
+
+def _increment_daily_event(event_name: str) -> None:
+    today = datetime.utcnow().date().isoformat()
+
+    with _usage_lock:
+        stats = _daily_stats.get(today)
+        if stats is None:
+            stats = _load_daily_stats_for_date(today)
+            _daily_stats[today] = stats
+
+        stats[event_name] = stats.get(event_name, 0) + 1
+        _save_daily_stats(today, stats)
+
+        for stored_date in list(_daily_stats.keys()):
+            if stored_date != today:
+                _daily_stats.pop(stored_date, None)
+
+
+def _load_all_daily_stats() -> dict[str, dict[str, int]]:
+    """Собирает статистику по всем датам из директории."""
+
+    if not os.path.isdir(STATS_DIR):
+        return {}
+
+    try:
+        filenames = sorted(
+            name for name in os.listdir(STATS_DIR) if name.endswith(".json")
+        )
+    except OSError as exc:
+        print(f"Не удалось прочитать директорию статистики: {exc}", flush=True)
+        return {}
+
+    collected: dict[str, dict[str, int]] = {}
+
+    for filename in filenames:
+        date_str = filename[:-5]
+        data = _load_daily_stats_for_date(date_str)
+        collected[date_str] = data
+
+    return collected
+
+
+def _format_daily_stats_summary(stats_by_date: dict[str, dict[str, int]]) -> str:
+    if not stats_by_date:
+        return "Пока нет сохранённых статистик."
+
+    lines: list[str] = []
+
+    for date_str in sorted(stats_by_date.keys()):
+        stats = stats_by_date[date_str]
+        parts: list[str] = []
+
+        for event, label in DAILY_EVENT_LABELS.items():
+            count = stats.get(event, 0)
+            if count:
+                parts.append(f"{label}: {count}")
+
+        for event in sorted(stats.keys()):
+            if event in DAILY_EVENT_LABELS:
+                continue
+            count = stats.get(event, 0)
+            if count:
+                parts.append(f"{event}: {count}")
+
+        if parts:
+            lines.append(f"{date_str}: {', '.join(parts)}")
+        else:
+            lines.append(f"{date_str}: нет событий")
+
+    return "\n".join(lines)
+
+
+def _build_daily_stats_csv(stats_by_date: dict[str, dict[str, int]]) -> io.BytesIO | None:
+    rows: list[tuple[str, str, int, str]] = []
+
+    for date_str in sorted(stats_by_date.keys()):
+        stats = stats_by_date[date_str]
+        for event in sorted(stats.keys()):
+            count = stats[event]
+            label = DAILY_EVENT_LABELS.get(event, event)
+            rows.append((date_str, event, count, label))
+
+    if not rows:
+        return None
+
+    csv_buffer = io.StringIO()
+    writer = csv.writer(csv_buffer)
+    writer.writerow(["date", "event", "count", "label"])
+    writer.writerows(rows)
+
+    bytes_buffer = io.BytesIO(csv_buffer.getvalue().encode("utf-8"))
+    bytes_buffer.seek(0)
+    bytes_buffer.name = "daily_stats.csv"
+    return bytes_buffer
+
+
+_initialize_daily_stats()
 
 # Для режима с одной картой формируем «колоду», чтобы карты не повторялись,
 # пока не будут вытянуты все 78.
@@ -385,6 +564,36 @@ def _draw_general_two_card_fallback() -> tuple[str, str, str] | None:
 bot = telebot.TeleBot(TOKEN)
 
 
+@bot.message_handler(commands=["stats"])
+def send_daily_stats_export(message) -> None:
+    """Отправляет администратору краткую сводку и CSV со статистикой."""
+
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+
+    if user_id != ADMIN_ID:
+        bot.reply_to(message, "Статистика доступна только администратору.")
+        return
+
+    stats_by_date = _load_all_daily_stats()
+    summary = _format_daily_stats_summary(stats_by_date)
+
+    bot.send_message(message.chat.id, summary)
+
+    csv_file = _build_daily_stats_csv(stats_by_date)
+    if csv_file is None:
+        return
+
+    csv_file.name = (
+        f"daily_stats_{datetime.utcnow().date().isoformat()}.csv"
+    )
+    bot.send_document(
+        message.chat.id,
+        csv_file,
+        caption="Экспорт статистики за все дни в CSV.",
+    )
+
+
 def _build_main_menu() -> ReplyKeyboardMarkup:
     """Создаёт главное меню с раскладами."""
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -479,6 +688,7 @@ def _send_daily_limit_message(chat_id: int, reading_type: str) -> None:
 # === Главное меню ===
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    _increment_daily_event(DAILY_EVENT_START)
     bot.send_message(
         message.chat.id,
         "🌙 Привет! Я Таро-бот. Выбери расклад:",
@@ -553,6 +763,7 @@ def _draw_random_card() -> str:
 
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
 def ask_single_card_topic(message):
+    _increment_daily_event(DAILY_EVENT_SINGLE_CARD_BUTTON)
     user_id = message.from_user.id
 
     # Админ (ты) может пользоваться без ограничений
@@ -595,6 +806,7 @@ def send_single_card_with_topic(message, user_id: int):
     # Тянем карту
     card = _draw_random_card()
     _mark_single_card_used_today(user_id)
+    _increment_daily_event(DAILY_EVENT_SINGLE_CARD_READING)
     category_key = TOPIC_TO_KEY[topic]
 
     # Берём значение по категории из tarot_topics
@@ -661,6 +873,8 @@ def _send_two_card_message(
 
     if user_id is not None:
         _mark_two_cards_used_today(user_id)
+
+    _increment_daily_event(DAILY_EVENT_TWO_CARDS_READING)
 
     bot.send_message(
         chat_id,
@@ -771,6 +985,7 @@ def successful_payment_handler(message):
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
 def ask_three_card_topic(message):
+    _increment_daily_event(DAILY_EVENT_THREE_CARDS_BUTTON)
     user_id = getattr(getattr(message, "from_user", None), "id", None)
 
     if (
@@ -840,6 +1055,8 @@ def send_three_cards_with_topic(message):
     cards, meaning = result
     if user_id is not None:
         _mark_three_cards_used_today(user_id)
+
+    _increment_daily_event(DAILY_EVENT_THREE_CARDS_READING)
 
     names = "\n".join(f"• {card}" for card in cards)
     bot.send_message(
