@@ -45,9 +45,14 @@ CONSULTATION_SUCCESS_MESSAGE = (
     "✨ Благодарю за оплату! Чтобы продолжить, напиши в бот @helenatarotbot."
 )
 CONSULTATION_MENU_LABEL = "💫 Расклад с тарологом за 100⭐️"
+BACK_TO_MENU_LABEL = "⬅️ Назад"
 
 ADMIN_ID = 220493509  # это ты :)
-single_card_usage: Dict[str, str] = {}  # {user_id: 'YYYY-MM-DD'}
+READING_TYPE_SINGLE = "single"
+READING_TYPE_TWO_CARDS = "two_cards"
+READING_TYPE_THREE_CARDS = "three_cards"
+
+single_card_usage: Dict[str, Dict[str, str]] = {}
 _usage_lock = threading.Lock()
 
 
@@ -71,11 +76,23 @@ def _load_single_card_usage() -> None:
         return
 
     if isinstance(data, dict):
-        single_card_usage = {
-            str(user_id): date_str
-            for user_id, date_str in data.items()
-            if isinstance(date_str, str)
-        }
+        normalized: Dict[str, Dict[str, str]] = {}
+
+        for user_id, value in data.items():
+            str_user_id = str(user_id)
+
+            if isinstance(value, dict):
+                normalized[str_user_id] = {
+                    str(key): str(date_str)
+                    for key, date_str in value.items()
+                    if isinstance(key, str) and isinstance(date_str, str)
+                }
+                continue
+
+            if isinstance(value, str):
+                normalized[str_user_id] = {READING_TYPE_SINGLE: value}
+
+        single_card_usage = normalized
     else:
         single_card_usage = {}
 
@@ -396,6 +413,7 @@ def _build_topic_selection_keyboard() -> ReplyKeyboardMarkup:
     for row in _TOPIC_SELECTION_LAYOUT:
         buttons = [KeyboardButton(title) for title in row]
         markup.add(*buttons)
+    markup.add(KeyboardButton(BACK_TO_MENU_LABEL))
     return markup
 
 
@@ -430,6 +448,42 @@ def _send_consultation_offer(chat_id: int) -> None:
     )
 
 
+_DAILY_LIMIT_MESSAGES = {
+    READING_TYPE_SINGLE: (
+        "✨ Вселенная уже ответила тебе сегодня. Приходи завтра, когда "
+        "энергия обновится 🌙\n\nХочешь глубже разобрать вопрос? "
+        f"Можешь заказать личную консультацию за {CONSULTATION_PRICE_STARS} "
+        "звёзд Telegram."
+    ),
+    READING_TYPE_TWO_CARDS: (
+        "✨ Сегодня лимит на расклад из двух карт уже исчерпан. Приходи "
+        "завтра за новой энергией 🌙\n\nХочешь глубже разобрать вопрос? "
+        f"Можешь заказать личную консультацию за {CONSULTATION_PRICE_STARS} "
+        "звёзд Telegram."
+    ),
+    READING_TYPE_THREE_CARDS: (
+        "✨ Сегодня лимит на расклад из трёх карт уже исчерпан. Приходи "
+        "завтра за новой энергией 🌙\n\nХочешь глубже разобрать вопрос? "
+        f"Можешь заказать личную консультацию за {CONSULTATION_PRICE_STARS} "
+        "звёзд Telegram."
+    ),
+}
+
+
+def _send_daily_limit_message(chat_id: int, reading_type: str) -> None:
+    text = _DAILY_LIMIT_MESSAGES.get(reading_type)
+
+    if text is None:
+        text = (
+            "✨ На сегодня лимит раскладов исчерпан. Попробуй снова завтра.\n\n"
+            f"Хочешь глубже разобрать вопрос? Можешь заказать личную "
+            f"консультацию за {CONSULTATION_PRICE_STARS} звёзд Telegram."
+        )
+
+    bot.send_message(chat_id, text)
+    _send_consultation_offer(chat_id)
+
+
 # === Главное меню ===
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -451,18 +505,47 @@ SINGLE_CARD_TOPICS = [
 ]
 
 
-def _has_used_single_card_today(user_id: int) -> bool:
-    """Проверяем, тянул ли пользователь карту сегодня."""
+def _has_used_reading_today(user_id: int, reading_type: str) -> bool:
+    """Проверяет, делал ли пользователь расклад указанного типа сегодня."""
     today = datetime.utcnow().date().isoformat()
     with _usage_lock:
-        return single_card_usage.get(str(user_id)) == today
+        return (
+            single_card_usage.get(str(user_id), {}).get(reading_type) == today
+        )
+
+
+def _mark_reading_used_today(user_id: int, reading_type: str) -> None:
+    """Помечает расклад указанного типа выполненным сегодня."""
+    today = datetime.utcnow().date().isoformat()
+    with _usage_lock:
+        user_usage = single_card_usage.setdefault(str(user_id), {})
+        user_usage[reading_type] = today
+        _save_single_card_usage()
+
+
+def _has_used_single_card_today(user_id: int) -> bool:
+    """Проверяем, тянул ли пользователь карту сегодня."""
+    return _has_used_reading_today(user_id, READING_TYPE_SINGLE)
 
 
 def _mark_single_card_used_today(user_id: int) -> None:
-    today = datetime.utcnow().date().isoformat()
-    with _usage_lock:
-        single_card_usage[str(user_id)] = today
-        _save_single_card_usage()
+    _mark_reading_used_today(user_id, READING_TYPE_SINGLE)
+
+
+def _has_used_two_cards_today(user_id: int) -> bool:
+    return _has_used_reading_today(user_id, READING_TYPE_TWO_CARDS)
+
+
+def _mark_two_cards_used_today(user_id: int) -> None:
+    _mark_reading_used_today(user_id, READING_TYPE_TWO_CARDS)
+
+
+def _has_used_three_cards_today(user_id: int) -> bool:
+    return _has_used_reading_today(user_id, READING_TYPE_THREE_CARDS)
+
+
+def _mark_three_cards_used_today(user_id: int) -> None:
+    _mark_reading_used_today(user_id, READING_TYPE_THREE_CARDS)
 
 
 def _draw_random_card() -> str:
@@ -482,14 +565,7 @@ def ask_single_card_topic(message):
 
     # Админ (ты) может пользоваться без ограничений
     if user_id != ADMIN_ID and _has_used_single_card_today(user_id):
-        bot.send_message(
-            message.chat.id,
-            "✨ Вселенная уже ответила тебе сегодня. "
-            "Приходи завтра, когда энергия обновится 🌙\n\n"
-            f"Хочешь глубже разобрать вопрос? Можешь заказать личную "
-            f"консультацию за {CONSULTATION_PRICE_STARS} звёзд Telegram.",
-        )
-        _send_consultation_offer(message.chat.id)
+        _send_daily_limit_message(message.chat.id, READING_TYPE_SINGLE)
         return
 
     msg = bot.send_message(
@@ -508,6 +584,14 @@ def show_consultation_offer(message):
 
 def send_single_card_with_topic(message, user_id: int):
     topic = message.text
+
+    if topic == BACK_TO_MENU_LABEL:
+        bot.send_message(
+            message.chat.id,
+            "Возвращаемся в главное меню 🌙",
+            reply_markup=_build_main_menu(),
+        )
+        return
 
     if topic not in SINGLE_CARD_TOPICS:
         bot.send_message(
@@ -571,6 +655,30 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
         parse_mode="Markdown",
         reply_markup=_build_main_menu(),
     )
+
+
+def _send_two_card_message(
+    chat_id: int, card1: str, card2: str, meaning: str, *, user_id: int | None = None
+) -> None:
+    response = (
+        "🧿 *Две карты:*\n\n"
+        f"• {card1}\n"
+        f"• {card2}\n\n"
+        f"{meaning}"
+    )
+
+    if user_id is not None:
+        _mark_two_cards_used_today(user_id)
+
+    bot.send_message(
+        chat_id,
+        response,
+        parse_mode="Markdown",
+        reply_markup=_build_main_menu(),
+    )
+
+    if user_id is not None and user_id != ADMIN_ID:
+        _send_consultation_offer(chat_id)
 
 
 def _draw_random_two_card_combination():
@@ -671,6 +779,16 @@ def successful_payment_handler(message):
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
 def ask_three_card_topic(message):
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+
+    if (
+        user_id is not None
+        and user_id != ADMIN_ID
+        and _has_used_three_cards_today(user_id)
+    ):
+        _send_daily_limit_message(message.chat.id, READING_TYPE_THREE_CARDS)
+        return
+
     prompt = bot.send_message(
         message.chat.id,
         "Выбери сферу для расклада из трёх карт:",
@@ -681,6 +799,23 @@ def ask_three_card_topic(message):
 
 def send_three_cards_with_topic(message):
     topic = message.text
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+
+    if (
+        user_id is not None
+        and user_id != ADMIN_ID
+        and _has_used_three_cards_today(user_id)
+    ):
+        _send_daily_limit_message(message.chat.id, READING_TYPE_THREE_CARDS)
+        return
+
+    if topic == BACK_TO_MENU_LABEL:
+        bot.send_message(
+            message.chat.id,
+            "Возвращаемся в главное меню 🌙",
+            reply_markup=_build_main_menu(),
+        )
+        return
 
     if topic not in SINGLE_CARD_TOPICS:
         prompt = bot.send_message(
@@ -703,6 +838,9 @@ def send_three_cards_with_topic(message):
         return
 
     cards, meaning = result
+    if user_id is not None:
+        _mark_three_cards_used_today(user_id)
+
     names = "\n".join(f"• {card}" for card in cards)
     bot.send_message(
         message.chat.id,
@@ -710,6 +848,9 @@ def send_three_cards_with_topic(message):
         parse_mode="Markdown",
         reply_markup=_build_main_menu(),
     )
+
+    if user_id is not None and user_id != ADMIN_ID:
+        _send_consultation_offer(message.chat.id)
 
 
 # === Обработка WebApp данных ===
@@ -721,6 +862,14 @@ def handle_web_app_data(message):
         card2 = data.get("card2")
 
         user_id = getattr(getattr(message, "from_user", None), "id", None)
+
+        if (
+            user_id is not None
+            and user_id != ADMIN_ID
+            and _has_used_two_cards_today(user_id)
+        ):
+            _send_daily_limit_message(message.chat.id, READING_TYPE_TWO_CARDS)
+            return
 
         limit_flags = [
             "limit_exceeded",
@@ -738,22 +887,18 @@ def handle_web_app_data(message):
             if user_id == ADMIN_ID:
                 fallback = _draw_random_two_card_combination()
                 if fallback:
-                    card1, card2, meaning = fallback
-                    response = (
-                        "🧿 *Две карты:*\n\n"
-                        f"• {card1}\n"
-                        f"• {card2}\n\n"
-                        f"{meaning}"
+                    fallback_card1, fallback_card2, fallback_meaning = fallback
+                    _send_two_card_message(
+                        message.chat.id,
+                        fallback_card1,
+                        fallback_card2,
+                        fallback_meaning,
+                        user_id=user_id,
                     )
-                    bot.send_message(message.chat.id, response, parse_mode="Markdown")
                     return
 
             if limit_detected:
-                bot.send_message(
-                    message.chat.id,
-                    "✨ Сегодня лимит на расклад из двух карт уже исчерпан. "
-                    "Попробуй снова завтра.",
-                )
+                _send_daily_limit_message(message.chat.id, READING_TYPE_TWO_CARDS)
             else:
                 bot.send_message(message.chat.id, "Ошибка: не удалось получить карты.")
             return
@@ -761,19 +906,25 @@ def handle_web_app_data(message):
         meaning = _get_two_card_meaning(card1, card2)
 
         if meaning:
-            _send_two_card_message(message.chat.id, card1, card2, meaning)
+            _send_two_card_message(
+                message.chat.id,
+                card1,
+                card2,
+                meaning,
+                user_id=user_id,
+            )
         else:
             if user_id == ADMIN_ID:
                 fallback = _draw_random_two_card_combination()
                 if fallback:
-                    card1, card2, meaning = fallback
-                    response = (
-                        "🧿 *Две карты:*\n\n"
-                        f"• {card1}\n"
-                        f"• {card2}\n\n"
-                        f"{meaning}"
+                    fallback_card1, fallback_card2, fallback_meaning = fallback
+                    _send_two_card_message(
+                        message.chat.id,
+                        fallback_card1,
+                        fallback_card2,
+                        fallback_meaning,
+                        user_id=user_id,
                     )
-                    bot.send_message(message.chat.id, response, parse_mode="Markdown")
                     return
 
             bot.send_message(message.chat.id, "❌ Ошибка: трактовка не найдена.")
