@@ -382,16 +382,6 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
     return markup
 
 
-def _build_topic_selection_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура с выбором тематики расклада."""
-
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton("❤️ Любовь"), KeyboardButton("💼 Карьера"))
-    markup.add(KeyboardButton("💰 Финансы"), KeyboardButton("🧘‍♀️ Здоровье"))
-    markup.add(KeyboardButton("🧿 Совет дня"))
-    return markup
-
-
 def _build_consultation_keyboard() -> InlineKeyboardMarkup:
     """Кнопка с предложением личной консультации."""
     markup = InlineKeyboardMarkup()
