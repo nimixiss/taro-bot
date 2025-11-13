@@ -25,6 +25,7 @@ CONSULTATION_URL = "https://t.me/helenatarotbot"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USAGE_STORAGE_PATH = os.path.join(BASE_DIR, "single_card_usage.json")
+STATS_DIR = os.path.join(BASE_DIR, "stats")
 
 # Для Telegram Stars при продаже цифровых услуг можно передавать
 # пустой provider_token – это корректно по официальной документации.
@@ -54,6 +55,15 @@ READING_TYPE_THREE_CARDS = "three_cards"
 
 single_card_usage: Dict[str, Dict[str, str]] = {}
 _usage_lock = threading.Lock()
+_daily_stats: Dict[str, Dict[str, int]] = {}
+
+
+DAILY_EVENT_START = "start"
+DAILY_EVENT_SINGLE_CARD_BUTTON = "single_card_button"
+DAILY_EVENT_SINGLE_CARD_READING = "single_card_reading"
+DAILY_EVENT_TWO_CARDS_READING = "two_cards_reading"
+DAILY_EVENT_THREE_CARDS_BUTTON = "three_cards_button"
+DAILY_EVENT_THREE_CARDS_READING = "three_cards_reading"
 
 
 def _load_single_card_usage() -> None:
@@ -112,6 +122,85 @@ def _save_single_card_usage() -> None:
 
 
 _load_single_card_usage()
+
+
+def _get_daily_stats_file_path(date_str: str) -> str:
+    return os.path.join(STATS_DIR, f"{date_str}.json")
+
+
+def _load_daily_stats_for_date(date_str: str) -> dict[str, int]:
+    path = _get_daily_stats_file_path(date_str)
+
+    if not os.path.exists(path):
+        return {}
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"Не удалось загрузить статистику за {date_str}: {exc}",
+            flush=True,
+        )
+        return {}
+
+    if not isinstance(raw_data, dict):
+        return {}
+
+    normalized: dict[str, int] = {}
+    for key, value in raw_data.items():
+        if isinstance(key, str) and isinstance(value, int):
+            normalized[key] = value
+
+    return normalized
+
+
+def _save_daily_stats(date_str: str, data: dict[str, int]) -> None:
+    path = _get_daily_stats_file_path(date_str)
+    tmp_path = f"{path}.tmp"
+
+    try:
+        os.makedirs(STATS_DIR, exist_ok=True)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        print(
+            f"Не удалось сохранить статистику за {date_str}: {exc}",
+            flush=True,
+        )
+
+
+def _initialize_daily_stats() -> None:
+    try:
+        os.makedirs(STATS_DIR, exist_ok=True)
+    except OSError as exc:
+        print(f"Не удалось создать директорию статистики: {exc}", flush=True)
+        return
+
+    today = datetime.utcnow().date().isoformat()
+    with _usage_lock:
+        _daily_stats[today] = _load_daily_stats_for_date(today)
+
+
+def _increment_daily_event(event_name: str) -> None:
+    today = datetime.utcnow().date().isoformat()
+
+    with _usage_lock:
+        stats = _daily_stats.get(today)
+        if stats is None:
+            stats = _load_daily_stats_for_date(today)
+            _daily_stats[today] = stats
+
+        stats[event_name] = stats.get(event_name, 0) + 1
+        _save_daily_stats(today, stats)
+
+        for stored_date in list(_daily_stats.keys()):
+            if stored_date != today:
+                _daily_stats.pop(stored_date, None)
+
+
+_initialize_daily_stats()
 
 # Для режима с одной картой формируем «колоду», чтобы карты не повторялись,
 # пока не будут вытянуты все 78.
@@ -479,6 +568,7 @@ def _send_daily_limit_message(chat_id: int, reading_type: str) -> None:
 # === Главное меню ===
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    _increment_daily_event(DAILY_EVENT_START)
     bot.send_message(
         message.chat.id,
         "🌙 Привет! Я Таро-бот. Выбери расклад:",
@@ -553,6 +643,7 @@ def _draw_random_card() -> str:
 
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
 def ask_single_card_topic(message):
+    _increment_daily_event(DAILY_EVENT_SINGLE_CARD_BUTTON)
     user_id = message.from_user.id
 
     # Админ (ты) может пользоваться без ограничений
@@ -595,6 +686,7 @@ def send_single_card_with_topic(message, user_id: int):
     # Тянем карту
     card = _draw_random_card()
     _mark_single_card_used_today(user_id)
+    _increment_daily_event(DAILY_EVENT_SINGLE_CARD_READING)
     category_key = TOPIC_TO_KEY[topic]
 
     # Берём значение по категории из tarot_topics
@@ -661,6 +753,8 @@ def _send_two_card_message(
 
     if user_id is not None:
         _mark_two_cards_used_today(user_id)
+
+    _increment_daily_event(DAILY_EVENT_TWO_CARDS_READING)
 
     bot.send_message(
         chat_id,
@@ -771,6 +865,7 @@ def successful_payment_handler(message):
 # === Три карты ===
 @bot.message_handler(func=lambda msg: msg.text == "🔮 Три карты")
 def ask_three_card_topic(message):
+    _increment_daily_event(DAILY_EVENT_THREE_CARDS_BUTTON)
     user_id = getattr(getattr(message, "from_user", None), "id", None)
 
     if (
@@ -840,6 +935,8 @@ def send_three_cards_with_topic(message):
     cards, meaning = result
     if user_id is not None:
         _mark_three_cards_used_today(user_id)
+
+    _increment_daily_event(DAILY_EVENT_THREE_CARDS_READING)
 
     names = "\n".join(f"• {card}" for card in cards)
     bot.send_message(
