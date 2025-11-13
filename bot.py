@@ -44,6 +44,7 @@ CONSULTATION_START_PARAMETER = "consultation"
 CONSULTATION_SUCCESS_MESSAGE = (
     "✨ Благодарю за оплату! Чтобы продолжить, напиши в бот @helenatarotbot."
 )
+CONSULTATION_MENU_LABEL = "💫 Расклад с тарологом за 100⭐️"
 
 ADMIN_ID = 220493509  # это ты :)
 single_card_usage: Dict[str, str] = {}  # {user_id: 'YYYY-MM-DD'}
@@ -317,6 +318,7 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
     markup.add(
         KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
     )
+    markup.add(KeyboardButton(CONSULTATION_MENU_LABEL))
     return markup
 
 
@@ -420,6 +422,12 @@ def ask_single_card_topic(message):
         reply_markup=markup,
     )
     bot.register_next_step_handler(msg, send_single_card_with_topic, user_id)
+
+
+@bot.message_handler(func=lambda msg: msg.text == CONSULTATION_MENU_LABEL)
+def show_consultation_offer(message):
+    """Показывает предложение консультации из главного меню."""
+    _send_consultation_offer(message.chat.id)
 
 
 def send_single_card_with_topic(message, user_id: int):
