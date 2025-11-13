@@ -10,7 +10,7 @@ import time
 import threading
 from collections import Counter
 from typing import Dict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telebot.apihelper import ApiTelegramException
 from telebot.types import (
     ReplyKeyboardMarkup,
@@ -205,13 +205,13 @@ def _initialize_daily_stats() -> None:
         print(f"Не удалось создать директорию статистики: {exc}", flush=True)
         return
 
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     with _usage_lock:
         _daily_stats[today] = _load_daily_stats_for_date(today)
 
 
 def _increment_daily_event(event_name: str) -> None:
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
 
     with _usage_lock:
         stats = _daily_stats.get(today)
@@ -783,7 +783,7 @@ def _send_consultation_offer(chat_id: int) -> None:
 
 
 def _get_card_of_day_for_date(date: datetime | None = None) -> tuple[str, str] | None:
-    target_date = (date or datetime.utcnow().date()).isoformat()
+    target_date = (date or datetime.now(timezone.utc).date()).isoformat()
     payload = card_of_day_schedule.get(target_date)
 
     if not isinstance(payload, dict):
@@ -886,7 +886,7 @@ SINGLE_CARD_TOPICS = [
 
 def _has_used_reading_today(user_id: int, reading_type: str) -> bool:
     """Проверяет, делал ли пользователь расклад указанного типа сегодня."""
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     with _usage_lock:
         return (
             single_card_usage.get(str(user_id), {}).get(reading_type) == today
@@ -895,7 +895,7 @@ def _has_used_reading_today(user_id: int, reading_type: str) -> bool:
 
 def _mark_reading_used_today(user_id: int, reading_type: str) -> None:
     """Помечает расклад указанного типа выполненным сегодня."""
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     with _usage_lock:
         user_usage = single_card_usage.setdefault(str(user_id), {})
         user_usage[reading_type] = today
@@ -1046,7 +1046,7 @@ def handle_stats_command(message):
 
     text = (message.text or "").strip()
     parts = text.split()
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
 
     if len(parts) == 1:
         date_str = today.isoformat()
