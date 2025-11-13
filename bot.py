@@ -641,6 +641,10 @@ def _send_daily_limit_message(chat_id: int, reading_type: str) -> None:
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     _increment_daily_event(DAILY_EVENT_START)
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    if user_id is None:
+        user_id = getattr(getattr(message, "chat", None), "id", None)
+    _register_user_id(user_id)
     bot.send_message(
         message.chat.id,
         "🌙 Привет! Я Таро-бот. Выбери расклад:",
@@ -700,6 +704,95 @@ def _has_used_three_cards_today(user_id: int) -> bool:
 
 def _mark_three_cards_used_today(user_id: int) -> None:
     _mark_reading_used_today(user_id, READING_TYPE_THREE_CARDS)
+
+
+def _register_user_id(user_id: int | None) -> None:
+    """Добавляет пользователя в хранилище, если его там ещё нет."""
+
+    if user_id is None:
+        return
+
+    str_user_id = str(user_id)
+
+    with _usage_lock:
+        if str_user_id in single_card_usage:
+            return
+
+        single_card_usage[str_user_id] = {}
+        _save_single_card_usage()
+
+
+def _collect_known_user_ids() -> list[int]:
+    """Возвращает список идентификаторов пользователей для рассылки."""
+
+    with _usage_lock:
+        user_ids: list[int] = []
+
+        for stored_id in single_card_usage.keys():
+            try:
+                user_ids.append(int(stored_id))
+            except (TypeError, ValueError):
+                continue
+
+    if ADMIN_ID not in user_ids:
+        user_ids.append(ADMIN_ID)
+
+    return user_ids
+
+
+def _broadcast_message_to_all(text: str) -> tuple[int, int, int]:
+    """Отправляет сообщение всем известным пользователям."""
+
+    delivered = 0
+    failed = 0
+    recipients = _collect_known_user_ids()
+
+    if not recipients:
+        return 0, delivered, failed
+
+    for chat_id in recipients:
+        try:
+            bot.send_message(chat_id, text)
+            delivered += 1
+        except ApiTelegramException as exc:
+            failed += 1
+            print(
+                f"Не удалось отправить сообщение пользователю {chat_id}: {exc}",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - хотим залогировать любые ошибки
+            failed += 1
+            print(
+                f"Не удалось отправить сообщение пользователю {chat_id}: {exc}",
+                flush=True,
+            )
+
+        time.sleep(0.1)
+
+    return len(recipients), delivered, failed
+
+
+def _send_broadcast_summary(message, total: int, delivered: int, failed: int) -> None:
+    if total == 0:
+        bot.send_message(
+            message.chat.id,
+            "Пока некого уведомлять — список пользователей пуст.",
+        )
+        return
+
+    lines = [
+        "📣 Рассылка завершена.",
+        f"Всего получателей: {total}",
+        f"Успешно доставлено: {delivered}",
+        f"С ошибкой: {failed}",
+    ]
+
+    bot.send_message(message.chat.id, "\n".join(lines))
+
+
+def _perform_broadcast(message, text: str) -> None:
+    total, delivered, failed = _broadcast_message_to_all(text)
+    _send_broadcast_summary(message, total, delivered, failed)
 
 
 def _draw_random_card() -> str:
@@ -784,13 +877,67 @@ def handle_stats_command(message):
     bot.send_message(message.chat.id, _format_daily_stats(date_str, stats))
 
 
+@bot.message_handler(commands=["broadcast"])
+def handle_broadcast_command(message):
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+
+    if user_id != ADMIN_ID:
+        bot.reply_to(message, "Команда доступна только администратору.")
+        return
+
+    _register_user_id(user_id)
+
+    raw_text = (message.text or "").strip()
+    parts = raw_text.split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+
+    if payload:
+        _perform_broadcast(message, payload)
+        return
+
+    prompt = bot.send_message(
+        message.chat.id,
+        "Отправь текст рассылки одним сообщением. Чтобы отменить, напиши /cancel.",
+    )
+    bot.register_next_step_handler(prompt, _handle_broadcast_text_step)
+
+
+def _handle_broadcast_text_step(message):
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+
+    if user_id != ADMIN_ID:
+        bot.reply_to(message, "Команда доступна только администратору.")
+        return
+
+    _register_user_id(user_id)
+
+    text = (message.text or "").strip()
+
+    if not text or text.lower() in {"/cancel", "cancel", "отмена"}:
+        bot.send_message(message.chat.id, "Рассылка отменена.")
+        return
+
+    _perform_broadcast(message, text)
+
+
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
 def ask_single_card_topic(message):
     _increment_daily_event(DAILY_EVENT_SINGLE_CARD_BUTTON)
-    user_id = message.from_user.id
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        user_id = getattr(getattr(message, "chat", None), "id", None)
+
+    _register_user_id(user_id)
 
     # Админ (ты) может пользоваться без ограничений
-    if user_id != ADMIN_ID and _has_used_single_card_today(user_id):
+    if (
+        user_id is not None
+        and user_id != ADMIN_ID
+        and _has_used_single_card_today(user_id)
+    ):
         _send_daily_limit_message(message.chat.id, READING_TYPE_SINGLE)
         return
 
@@ -808,7 +955,7 @@ def show_consultation_offer(message):
     _send_consultation_offer(message.chat.id)
 
 
-def send_single_card_with_topic(message, user_id: int):
+def send_single_card_with_topic(message, user_id: int | None):
     topic = message.text
 
     if topic == BACK_TO_MENU_LABEL:
@@ -828,7 +975,8 @@ def send_single_card_with_topic(message, user_id: int):
 
     # Тянем карту
     card = _draw_random_card()
-    _mark_single_card_used_today(user_id)
+    if user_id is not None:
+        _mark_single_card_used_today(user_id)
     _increment_daily_event(DAILY_EVENT_SINGLE_CARD_READING)
     category_key = TOPIC_TO_KEY[topic]
 
@@ -853,7 +1001,7 @@ def send_single_card_with_topic(message, user_id: int):
 
     _send_single_card_reply(message.chat.id, card, topic, meaning)
 
-    if user_id != ADMIN_ID:
+    if user_id is None or user_id != ADMIN_ID:
         _send_consultation_offer(message.chat.id)
 
 
@@ -1011,6 +1159,8 @@ def ask_three_card_topic(message):
     _increment_daily_event(DAILY_EVENT_THREE_CARDS_BUTTON)
     user_id = getattr(getattr(message, "from_user", None), "id", None)
 
+    _register_user_id(user_id)
+
     if (
         user_id is not None
         and user_id != ADMIN_ID
@@ -1030,6 +1180,8 @@ def ask_three_card_topic(message):
 def send_three_cards_with_topic(message):
     topic = message.text
     user_id = getattr(getattr(message, "from_user", None), "id", None)
+
+    _register_user_id(user_id)
 
     if (
         user_id is not None
@@ -1102,6 +1254,8 @@ def handle_web_app_data(message):
         card2 = data.get("card2")
 
         user_id = getattr(getattr(message, "from_user", None), "id", None)
+
+        _register_user_id(user_id)
 
         if (
             user_id is not None
