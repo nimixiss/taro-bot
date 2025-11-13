@@ -56,6 +56,13 @@ READING_TYPE_SINGLE = "single"
 READING_TYPE_TWO_CARDS = "two_cards"
 READING_TYPE_THREE_CARDS = "three_cards"
 
+YES_NO_BUTTON_LABEL = "🎯 Ответ да/нет"
+YES_NO_CALLBACK_DRAW = "yes_no_draw"
+YES_NO_PROMPT_TEXT = (
+    "🎯 Сконцентрируйся на своём вопросе, а когда будешь готова — нажми кнопку, "
+    "чтобы получить ответ."
+)
+
 single_card_usage: Dict[str, Dict[str, str]] = {}
 _usage_lock = threading.Lock()
 _daily_stats: Dict[str, Dict[str, int]] = {}
@@ -67,6 +74,8 @@ DAILY_EVENT_SINGLE_CARD_READING = "single_card_reading"
 DAILY_EVENT_TWO_CARDS_READING = "two_cards_reading"
 DAILY_EVENT_THREE_CARDS_BUTTON = "three_cards_button"
 DAILY_EVENT_THREE_CARDS_READING = "three_cards_reading"
+DAILY_EVENT_YES_NO_BUTTON = "yes_no_button"
+DAILY_EVENT_YES_NO_READING = "yes_no_reading"
 
 
 DAILY_EVENT_LABELS = {
@@ -76,6 +85,8 @@ DAILY_EVENT_LABELS = {
     DAILY_EVENT_TWO_CARDS_READING: "Расклады на две карты",
     DAILY_EVENT_THREE_CARDS_BUTTON: "Нажатия «Три карты»",
     DAILY_EVENT_THREE_CARDS_READING: "Расклады на три карты",
+    DAILY_EVENT_YES_NO_BUTTON: "Нажатия «Ответ да/нет»",
+    DAILY_EVENT_YES_NO_READING: "Ответы да/нет",
 }
 
 
@@ -328,6 +339,21 @@ TOPIC_TO_KEY = {
 with open("combinations.json", "r", encoding="utf-8") as f:
     _raw_three_card_data = json.load(f)
 
+YES_NO_FILE = "yesnot.json"
+if os.path.exists(YES_NO_FILE):
+    try:
+        with open(YES_NO_FILE, "r", encoding="utf-8") as f:
+            _yes_no_answers: Dict[str, str] = {
+                str(name): str(value)
+                for name, value in json.load(f).items()
+                if isinstance(name, str) and isinstance(value, str)
+            }
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Не удалось загрузить файл ответов да/нет: {exc}", flush=True)
+        _yes_no_answers = {}
+else:
+    _yes_no_answers = {}
+
 
 def _normalize_three_card_combinations(raw_data) -> tuple[Dict[str, dict[str, str]], list[tuple[str, str]]]:
     """Подготавливает расклады на три карты и формирует общий пул."""
@@ -360,6 +386,124 @@ def _normalize_three_card_combinations(raw_data) -> tuple[Dict[str, dict[str, st
             normalized[topic_key] = topic_combinations
 
     return normalized, fallback_pool
+
+
+_MAJOR_ARCANA_IMAGE_MAP = {
+    "шут (0)": "fool",
+    "маг (i)": "magician",
+    "верховная жрица (ii)": "high_priestess",
+    "императрица (iii)": "empress",
+    "император (iv)": "emperor",
+    "иерофант (v)": "hierophant",
+    "влюбленные (vi)": "lovers",
+    "колесница (vii)": "chariot",
+    "сила (viii)": "strength",
+    "отшельник (ix)": "hermit",
+    "колесо фортуны (x)": "wheel_of_fortune",
+    "справедливость (xi)": "justice",
+    "повешенный (xii)": "hanged_man",
+    "смерть (xiii)": "death",
+    "умереность (xiv)": "temperance",
+    "умеренность (xiv)": "temperance",
+    "дьявол (xv)": "devil",
+    "башня (xvi)": "tower",
+    "звезда (xvii)": "star",
+    "луна (xviii)": "moon",
+    "солнце (xix)": "sun",
+    "суд (xx)": "judgement",
+    "мир (xxi)": "world",
+}
+
+_RANK_IMAGE_MAP = {
+    "туз": "ace",
+    "двойка": "two",
+    "тройка": "three",
+    "четверка": "four",
+    "пятерка": "five",
+    "шестерка": "six",
+    "семерка": "seven",
+    "восьмерка": "eight",
+    "девятка": "nine",
+    "десятка": "ten",
+    "паж": "page",
+    "рыцарь": "knight",
+    "королева": "queen",
+    "король": "king",
+}
+
+_SUIT_IMAGE_MAP = {
+    "жезлов": "wands",
+    "жезла": "wands",
+    "жезлы": "wands",
+    "кубков": "cups",
+    "кубки": "cups",
+    "кубка": "cups",
+    "мечей": "swords",
+    "мечи": "swords",
+    "меча": "swords",
+    "пентакли": "pentacles",
+    "пентаклей": "pentacles",
+    "пентакля": "pentacles",
+}
+
+
+def _normalize_card_key(name: str) -> str:
+    return name.strip().lower().replace("ё", "е")
+
+
+def _get_yes_no_image_basename(card_name: str) -> str | None:
+    normalized = _normalize_card_key(card_name)
+
+    major = _MAJOR_ARCANA_IMAGE_MAP.get(normalized)
+    if major:
+        return major
+
+    parts = normalized.split()
+    if len(parts) < 2:
+        return None
+
+    rank = parts[0]
+    suit = parts[-1]
+
+    rank_en = _RANK_IMAGE_MAP.get(rank)
+    suit_en = _SUIT_IMAGE_MAP.get(suit)
+
+    if rank_en and suit_en:
+        return f"{rank_en}_of_{suit_en}"
+
+    return None
+
+
+def _get_yes_no_image_path(card_name: str) -> str | None:
+    basename = _get_yes_no_image_basename(card_name)
+    if not basename:
+        return None
+
+    path = os.path.join(CARDS_FOLDER, f"{basename}.png")
+    if os.path.exists(path):
+        return path
+
+    return None
+
+
+def _draw_yes_no_answer() -> tuple[str, str] | None:
+    if not _yes_no_answers:
+        return None
+
+    card = random.choice(list(_yes_no_answers.keys()))
+    return card, _yes_no_answers[card]
+
+
+def _build_yes_no_prompt_keyboard() -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔁 Получить ответ", callback_data=YES_NO_CALLBACK_DRAW))
+    return markup
+
+
+def _build_yes_no_repeat_keyboard() -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔁 Спросить ещё", callback_data=YES_NO_CALLBACK_DRAW))
+    return markup
 
 
 combinations_3cards_by_topic, _three_card_fallback_pool = _normalize_three_card_combinations(
@@ -553,6 +697,7 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
         KeyboardButton("🃏 Одна карта"),
         KeyboardButton("🔮 Три карты"),
     )
+    markup.add(KeyboardButton(YES_NO_BUTTON_LABEL))
     markup.add(
         KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
     )
@@ -922,6 +1067,29 @@ def _handle_broadcast_text_step(message):
     _perform_broadcast(message, text)
 
 
+@bot.message_handler(func=lambda msg: msg.text == YES_NO_BUTTON_LABEL)
+def prompt_yes_no_reading(message):
+    _increment_daily_event(DAILY_EVENT_YES_NO_BUTTON)
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+
+    _register_user_id(user_id)
+
+    if not _yes_no_answers:
+        bot.send_message(
+            message.chat.id,
+            "Сейчас ответы да/нет недоступны. Попробуй немного позже.",
+            reply_markup=_build_main_menu(),
+        )
+        return
+
+    bot.send_message(
+        message.chat.id,
+        YES_NO_PROMPT_TEXT,
+        reply_markup=_build_yes_no_prompt_keyboard(),
+    )
+
+
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
 def ask_single_card_topic(message):
     _increment_daily_event(DAILY_EVENT_SINGLE_CARD_BUTTON)
@@ -1029,6 +1197,63 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
         caption,
         parse_mode="Markdown",
         reply_markup=_build_main_menu(),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: getattr(call, "data", None) == YES_NO_CALLBACK_DRAW)
+def handle_yes_no_callback(call):
+    result = _draw_yes_no_answer()
+
+    if result is None:
+        bot.answer_callback_query(
+            call.id,
+            text="Сейчас ответы недоступны. Попробуй позже.",
+            show_alert=True,
+        )
+        message = getattr(call, "message", None)
+        if message is not None:
+            bot.send_message(
+                message.chat.id,
+                "Сейчас ответы да/нет недоступны. Попробуй немного позже.",
+                reply_markup=_build_main_menu(),
+            )
+        return
+
+    _increment_daily_event(DAILY_EVENT_YES_NO_READING)
+
+    user = getattr(call, "from_user", None)
+    user_id = getattr(user, "id", None)
+    _register_user_id(user_id)
+
+    card, answer = result
+    caption = f"🎯 *{card}*\nОтвет: *{answer}*"
+    image_path = _get_yes_no_image_path(card)
+    message = getattr(call, "message", None)
+
+    bot.answer_callback_query(call.id, text="✨ Ответ готов!")
+
+    if message is None:
+        return
+
+    chat_id = message.chat.id
+    reply_markup = _build_yes_no_repeat_keyboard()
+
+    if image_path:
+        with open(image_path, "rb") as photo:
+            bot.send_photo(
+                chat_id,
+                photo,
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=reply_markup,
+            )
+        return
+
+    bot.send_message(
+        chat_id,
+        caption,
+        parse_mode="Markdown",
+        reply_markup=reply_markup,
     )
 
 
