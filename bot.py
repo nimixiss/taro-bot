@@ -55,6 +55,7 @@ ADMIN_ID = 220493509  # это ты :)
 READING_TYPE_SINGLE = "single"
 READING_TYPE_TWO_CARDS = "two_cards"
 READING_TYPE_THREE_CARDS = "three_cards"
+READING_TYPE_YES_NO = "yes_no"
 
 YES_NO_BUTTON_LABEL = "🎯 Ответ да/нет"
 YES_NO_CALLBACK_DRAW = "yes_no_draw"
@@ -759,6 +760,11 @@ _DAILY_LIMIT_MESSAGES = {
         "✨ Вселенная уже ответила тебе сегодня. Приходи завтра, когда "
         "энергия обновится 🌙"
     ),
+    READING_TYPE_YES_NO: (
+        "✨ Сегодня лимит на ответ да/нет уже исчерпан. Приходи завтра, "
+        "а если хочешь разобрать вопрос глубже — доступен расклад с "
+        "тарологом за 100 звёзд 🌙"
+    ),
     READING_TYPE_TWO_CARDS: (
         "✨ Сегодня лимит на расклад из двух карт уже исчерпан. Приходи "
         "завтра за новой энергией 🌙"
@@ -849,6 +855,14 @@ def _has_used_three_cards_today(user_id: int) -> bool:
 
 def _mark_three_cards_used_today(user_id: int) -> None:
     _mark_reading_used_today(user_id, READING_TYPE_THREE_CARDS)
+
+
+def _has_used_yes_no_today(user_id: int) -> bool:
+    return _has_used_reading_today(user_id, READING_TYPE_YES_NO)
+
+
+def _mark_yes_no_used_today(user_id: int) -> None:
+    _mark_reading_used_today(user_id, READING_TYPE_YES_NO)
 
 
 def _register_user_id(user_id: int | None) -> None:
@@ -1072,8 +1086,18 @@ def prompt_yes_no_reading(message):
     _increment_daily_event(DAILY_EVENT_YES_NO_BUTTON)
     user = getattr(message, "from_user", None)
     user_id = getattr(user, "id", None)
+    if user_id is None:
+        user_id = getattr(getattr(message, "chat", None), "id", None)
 
     _register_user_id(user_id)
+
+    if (
+        user_id is not None
+        and user_id != ADMIN_ID
+        and _has_used_yes_no_today(user_id)
+    ):
+        _send_daily_limit_message(message.chat.id, READING_TYPE_YES_NO)
+        return
 
     if not _yes_no_answers:
         bot.send_message(
@@ -1202,6 +1226,25 @@ def _send_single_card_reply(chat_id: int, card: str, topic: str, meaning: str) -
 
 @bot.callback_query_handler(func=lambda call: getattr(call, "data", None) == YES_NO_CALLBACK_DRAW)
 def handle_yes_no_callback(call):
+    user = getattr(call, "from_user", None)
+    user_id = getattr(user, "id", None)
+    _register_user_id(user_id)
+
+    if (
+        user_id is not None
+        and user_id != ADMIN_ID
+        and _has_used_yes_no_today(user_id)
+    ):
+        bot.answer_callback_query(
+            call.id,
+            text="Сегодня лимит по ответу да/нет уже исчерпан.",
+            show_alert=True,
+        )
+        message = getattr(call, "message", None)
+        if message is not None:
+            _send_daily_limit_message(message.chat.id, READING_TYPE_YES_NO)
+        return
+
     result = _draw_yes_no_answer()
 
     if result is None:
@@ -1220,10 +1263,6 @@ def handle_yes_no_callback(call):
         return
 
     _increment_daily_event(DAILY_EVENT_YES_NO_READING)
-
-    user = getattr(call, "from_user", None)
-    user_id = getattr(user, "id", None)
-    _register_user_id(user_id)
 
     card, answer = result
     caption = f"🎯 *{card}*\nОтвет: *{answer}*"
@@ -1247,6 +1286,8 @@ def handle_yes_no_callback(call):
                 parse_mode="Markdown",
                 reply_markup=reply_markup,
             )
+        if user_id is not None and user_id != ADMIN_ID:
+            _mark_yes_no_used_today(user_id)
         return
 
     bot.send_message(
@@ -1255,6 +1296,8 @@ def handle_yes_no_callback(call):
         parse_mode="Markdown",
         reply_markup=reply_markup,
     )
+    if user_id is not None and user_id != ADMIN_ID:
+        _mark_yes_no_used_today(user_id)
 
 
 def _send_two_card_message(
