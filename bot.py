@@ -495,7 +495,7 @@ def ask_single_card_topic(message):
     msg = bot.send_message(
         message.chat.id,
         "Выбери сферу, о которой хочешь спросить:",
-        reply_markup=TOPIC_SELECTION_KEYBOARD,
+        reply_markup=_build_topic_selection_keyboard(),
     )
     bot.register_next_step_handler(msg, send_single_card_with_topic, user_id)
 
@@ -674,7 +674,7 @@ def ask_three_card_topic(message):
     prompt = bot.send_message(
         message.chat.id,
         "Выбери сферу для расклада из трёх карт:",
-        reply_markup=TOPIC_SELECTION_KEYBOARD,
+        reply_markup=_build_topic_selection_keyboard(),
     )
     bot.register_next_step_handler(prompt, send_three_cards_with_topic)
 
@@ -686,7 +686,7 @@ def send_three_cards_with_topic(message):
         prompt = bot.send_message(
             message.chat.id,
             "Я жду выбор одной из сфер: любовь, карьера, финансы, здоровье или совет дня 💫",
-            reply_markup=TOPIC_SELECTION_KEYBOARD,
+            reply_markup=_build_topic_selection_keyboard(),
         )
         bot.register_next_step_handler(prompt, send_three_cards_with_topic)
         return
