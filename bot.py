@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import telebot
 import json
@@ -5,8 +7,9 @@ import random
 import requests
 import time
 import threading
+from collections import Counter
 from typing import Dict
-from datetime import datetime
+from datetime import datetime, timedelta
 from telebot.apihelper import ApiTelegramException
 from telebot.types import (
     ReplyKeyboardMarkup,
@@ -64,6 +67,16 @@ DAILY_EVENT_SINGLE_CARD_READING = "single_card_reading"
 DAILY_EVENT_TWO_CARDS_READING = "two_cards_reading"
 DAILY_EVENT_THREE_CARDS_BUTTON = "three_cards_button"
 DAILY_EVENT_THREE_CARDS_READING = "three_cards_reading"
+
+
+DAILY_EVENT_LABELS = {
+    DAILY_EVENT_START: "Команда /start",
+    DAILY_EVENT_SINGLE_CARD_BUTTON: "Нажатия «Одна карта»",
+    DAILY_EVENT_SINGLE_CARD_READING: "Расклады на одну карту",
+    DAILY_EVENT_TWO_CARDS_READING: "Расклады на две карты",
+    DAILY_EVENT_THREE_CARDS_BUTTON: "Нажатия «Три карты»",
+    DAILY_EVENT_THREE_CARDS_READING: "Расклады на три карты",
+}
 
 
 def _load_single_card_usage() -> None:
@@ -198,6 +211,65 @@ def _increment_daily_event(event_name: str) -> None:
         for stored_date in list(_daily_stats.keys()):
             if stored_date != today:
                 _daily_stats.pop(stored_date, None)
+
+
+def _format_event_label(event_name: str) -> str:
+    return DAILY_EVENT_LABELS.get(event_name, event_name)
+
+
+def _format_daily_stats(date_str: str, stats: dict[str, int]) -> str:
+    if not stats:
+        return f"За {date_str} пока нет записей."
+
+    lines = [f"📊 Статистика за {date_str}:"]
+
+    for event_name, count in sorted(stats.items()):
+        lines.append(f"• {_format_event_label(event_name)}: {count}")
+
+    return "\n".join(lines)
+
+
+def _prepare_stats_csv() -> tuple[str, io.BytesIO, Counter[str]] | None:
+    if not os.path.isdir(STATS_DIR):
+        return None
+
+    files = [
+        entry
+        for entry in os.listdir(STATS_DIR)
+        if entry.endswith(".json") and os.path.isfile(os.path.join(STATS_DIR, entry))
+    ]
+
+    if not files:
+        return None
+
+    totals: Counter[str] = Counter()
+    csv_buffer = io.StringIO()
+    writer = csv.writer(csv_buffer)
+    writer.writerow(["date", "event", "count"])
+    has_rows = False
+
+    for filename in sorted(files):
+        date_part = filename[:-5]
+        stats = _load_daily_stats_for_date(date_part)
+
+        if not stats:
+            continue
+
+        for event_name, count in stats.items():
+            writer.writerow([date_part, event_name, count])
+            totals[event_name] += count
+            has_rows = True
+
+    if not has_rows:
+        return None
+
+    data = csv_buffer.getvalue().encode("utf-8")
+    binary = io.BytesIO(data)
+    filename = "stats_export.csv"
+    binary.name = filename
+    binary.seek(0)
+
+    return filename, binary, totals
 
 
 _initialize_daily_stats()
@@ -639,6 +711,77 @@ def _draw_random_card() -> str:
         random.shuffle(_shuffled_single_card_deck)
 
     return _shuffled_single_card_deck.pop()
+
+
+@bot.message_handler(commands=["stats"])
+def handle_stats_command(message):
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+
+    if user_id != ADMIN_ID:
+        bot.reply_to(message, "Команда доступна только администратору.")
+        return
+
+    text = (message.text or "").strip()
+    parts = text.split()
+    today = datetime.utcnow().date()
+
+    if len(parts) == 1:
+        date_str = today.isoformat()
+        stats = _load_daily_stats_for_date(date_str)
+        bot.send_message(message.chat.id, _format_daily_stats(date_str, stats))
+        return
+
+    command_arg = parts[1].lower()
+
+    if command_arg in ("today", "сегодня"):
+        date_str = today.isoformat()
+        stats = _load_daily_stats_for_date(date_str)
+        bot.send_message(message.chat.id, _format_daily_stats(date_str, stats))
+        return
+
+    if command_arg in ("yesterday", "вчера"):
+        date_str = (today - timedelta(days=1)).isoformat()
+        stats = _load_daily_stats_for_date(date_str)
+        bot.send_message(message.chat.id, _format_daily_stats(date_str, stats))
+        return
+
+    if command_arg in ("export", "csv", "выгрузка"):
+        result = _prepare_stats_csv()
+        if result is None:
+            bot.send_message(message.chat.id, "Выгрузить нечего — нет файлов статистики.")
+            return
+
+        filename, buffer, totals = result
+        summary_lines = [f"📈 {filename} готов."]
+
+        if totals:
+            summary_lines.append("")
+            summary_lines.append("Итоги по всем дням:")
+            for event_name, count in sorted(totals.items()):
+                summary_lines.append(f"• {_format_event_label(event_name)}: {count}")
+
+        caption = "\n".join(summary_lines)
+        bot.send_document(
+            message.chat.id,
+            buffer,
+            caption=caption,
+        )
+        return
+
+    date_candidate = parts[1]
+    try:
+        requested_date = datetime.fromisoformat(date_candidate).date()
+    except ValueError:
+        bot.send_message(
+            message.chat.id,
+            "Не понял дату. Используй формат ГГГГ-ММ-ДД или команды export/today/yesterday.",
+        )
+        return
+
+    date_str = requested_date.isoformat()
+    stats = _load_daily_stats_for_date(date_str)
+    bot.send_message(message.chat.id, _format_daily_stats(date_str, stats))
 
 
 @bot.message_handler(func=lambda msg: msg.text == "🃏 Одна карта")
