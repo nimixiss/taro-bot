@@ -696,11 +696,11 @@ def _build_main_menu() -> ReplyKeyboardMarkup:
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         KeyboardButton("🃏 Одна карта"),
-        KeyboardButton("🔮 Три карты"),
-    )
-    markup.add(KeyboardButton(YES_NO_BUTTON_LABEL))
-    markup.add(
         KeyboardButton("🧿 Две карты", web_app=WebAppInfo(url=WEBAPP_URL)),
+    )
+    markup.add(
+        KeyboardButton("🔮 Три карты"),
+        KeyboardButton(YES_NO_BUTTON_LABEL),
     )
     markup.add(KeyboardButton(CONSULTATION_MENU_LABEL))
     return markup
