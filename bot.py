@@ -1689,4 +1689,9 @@ def handle_web_app_data(message):
 
 # === Запуск бота ===
 if __name__ == "__main__":
+    # Telegram cannot use getUpdates while a webhook is configured.
+    # Keep pending updates so users do not lose unread messages.
+    if not bot.remove_webhook():
+        raise RuntimeError("Failed to remove Telegram webhook before polling")
+    print("Telegram webhook removed; starting polling", flush=True)
     bot.polling(timeout=60, long_polling_timeout=30)
